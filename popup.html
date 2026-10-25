@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>English to Bangla Translator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-wrapper">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="brand-badge">
+          <span>অ</span>
+        </div>
+        <div class="brand-text">
+          <h1>En ➔ Bangla</h1>
+          <p class="brand-sub">Hover & Click Translator</p>
+        </div>
+      </div>
+      <div id="statusPill" class="status-pill status-active">
+        <span class="status-dot"></span>
+        <span id="statusLabel">Active</span>
+      </div>
+    </header>
+
+    <!-- Master Switch Card -->
+    <section class="card toggle-card">
+      <div class="toggle-content">
+        <div class="toggle-icon-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+          </svg>
+        </div>
+        <div class="toggle-texts">
+          <span class="toggle-heading">Double-Click Translation</span>
+          <span class="toggle-desc">Instant popups on webpage words</span>
+        </div>
+      </div>
+      <label class="switch" for="enableToggle" title="Enable/Disable double-click translation">
+        <input type="checkbox" id="enableToggle" checked>
+        <span class="slider"></span>
+      </label>
+    </section>
+
+    <!-- Quick Manual Translator -->
+    <section class="card translator-card">
+      <div class="card-section-header">
+        <span class="section-title">Quick Translate</span>
+        <span id="charCount" class="char-counter">0 chars</span>
+      </div>
+
+      <div class="input-container">
+        <textarea id="quickInput" rows="2" placeholder="Type or paste English word/sentence..."></textarea>
+        <button id="clearInputBtn" class="action-icon-btn clear-btn" title="Clear text" style="display: none;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="button-bar">
+        <button id="speakInputBtn" class="btn btn-secondary" title="Pronounce English text" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+          </svg>
+          <span>Listen</span>
+        </button>
+
+        <button id="translateBtn" class="btn btn-primary" title="Translate to Bangla">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+          </svg>
+          <span>Translate</span>
+        </button>
+      </div>
+
+      <!-- Result Box -->
+      <div id="resultBox" class="result-box" style="display: none;">
+        <div class="result-header">
+          <span class="result-title">Bangla Meaning</span>
+          <div class="result-actions">
+            <button id="copyResultBtn" class="action-icon-btn" title="Copy translation">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div id="primaryResult" class="primary-meaning"></div>
+        <div id="dictMeanings" class="dict-breakdown"></div>
+      </div>
+    </section>
+
+    <!-- Recent Lookups -->
+    <section class="card recent-card">
+      <div class="card-section-header">
+        <span class="section-title">Recent Words</span>
+        <button id="clearRecentBtn" class="text-link-btn" title="Clear recent history">Clear</button>
+      </div>
+
+      <div id="recentList" class="recent-list">
+        <!-- Rendered dynamically by popup.js -->
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <span>💡 Double-click any word on any webpage to translate</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
