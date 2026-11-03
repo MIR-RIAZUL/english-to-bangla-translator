@@ -2,7 +2,7 @@
  * Content Script
  * Listens for double-click, hover, and keyboard shortcut (TRANSLATE_SELECTION) events,
  * extracts English words, renders an isolated Shadow DOM floating tooltip,
- * and manages pronunciation, clipboard copy, and dismissal events.
+ * and manages English & Bangla pronunciation, clipboard copy, and dismissal events.
  */
 
 (() => {
@@ -17,11 +17,15 @@
   let hoverTimer = null;
   let pendingHoverWord = '';
 
+  // Bangla voice availability (resolved once on page load)
+  let banglaVoiceAvailable = false;
+
   // Settings state with safe defaults
   let currentSettings = {
     triggerMode: 'dblclick',
     hoverDelay: 600,
-    modifierKey: 'none'
+    modifierKey: 'none',
+    speechRate: 0.95
   };
 
   /**
@@ -81,6 +85,19 @@
 
   // Attempt initial font registration
   ensureLocalFontsInjected();
+
+  // Detect Bangla voice availability using tts.js (loaded before content.js)
+  try {
+    if (typeof findBanglaVoice === 'function') {
+      findBanglaVoice().then((voice) => {
+        banglaVoiceAvailable = !!voice;
+      }).catch(() => {
+        banglaVoiceAvailable = false;
+      });
+    }
+  } catch (err) {
+    banglaVoiceAvailable = false;
+  }
 
   // Retrieve initial enabled state and settings from chrome.storage.local
   chrome.storage.local.get({ enabled: true, settings: {} }, (result) => {
@@ -293,28 +310,40 @@
   }
 
   /**
-   * Pronounce English text using Web Speech API
+   * Gets the current speech rate from settings.
+   * @returns {number} Speech rate value.
+   */
+  function getSpeechRate() {
+    return typeof currentSettings.speechRate === 'number' ? currentSettings.speechRate : 0.95;
+  }
+
+  /**
+   * Pronounce English text using the tts.js speak() function.
    * @param {string} text
    * @param {HTMLElement} [buttonElement]
    */
   function speakEnglishWord(text, buttonElement) {
-    if (!('speechSynthesis' in window)) return;
-
     try {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'en-US';
-      utterance.rate = typeof currentSettings.speechRate === 'number' ? currentSettings.speechRate : 0.95;
-
-      if (buttonElement) {
-        buttonElement.classList.add('playing');
-        utterance.onend = () => buttonElement.classList.remove('playing');
-        utterance.onerror = () => buttonElement.classList.remove('playing');
+      if (typeof speak === 'function') {
+        speak(text, 'en-US', getSpeechRate(), buttonElement);
       }
-
-      window.speechSynthesis.speak(utterance);
     } catch (err) {
-      console.warn('Speech synthesis failed:', err);
+      console.warn('English speech synthesis failed:', err);
+    }
+  }
+
+  /**
+   * Pronounce Bangla text using the tts.js speak() function.
+   * @param {string} text
+   * @param {HTMLElement} [buttonElement]
+   */
+  function speakBanglaWord(text, buttonElement) {
+    try {
+      if (typeof speak === 'function') {
+        speak(text, 'bn-BD', getSpeechRate(), buttonElement);
+      }
+    } catch (err) {
+      console.warn('Bangla speech synthesis failed:', err);
     }
   }
 
@@ -332,7 +361,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
         </svg>
       `;
-      btn.title = 'কপি হয়েছে!';
+      btn.title = 'কপি হয়েছে!';
       setTimeout(() => {
         if (btn) {
           btn.innerHTML = originalHTML;
@@ -640,9 +669,14 @@
         transition: all 0.15s ease;
       }
 
-      .icon-btn:hover {
+      .icon-btn:hover:not(:disabled) {
         background: rgba(255, 255, 255, 0.15);
         color: #ffffff;
+      }
+
+      .icon-btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
       }
 
       .icon-btn.playing {
@@ -692,14 +726,24 @@
       }
 
       /* Bangla Primary Result */
+      .bangla-result-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+
       .bangla-primary {
         font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, 'SolaimanLipi', 'Vrinda', sans-serif;
         font-size: 20px;
         font-weight: 700;
         color: #38bdf8;
         letter-spacing: 0.2px;
-        margin-bottom: 6px;
         word-break: break-word;
+      }
+
+      .btn-speak-bn {
+        flex-shrink: 0;
       }
 
       /* Dictionary Meanings */
@@ -749,7 +793,7 @@
           <span class="original-word" title="${escapeHtml(word)}">${escapeHtml(word)}</span>
         </div>
         <div class="header-actions">
-          <button class="icon-btn btn-speak" title="উচ্চারণ শুনুন">
+          <button class="icon-btn btn-speak-en" title="উচ্চারণ শুনুন (English)" aria-label="Pronounce English word">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
               <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
             </svg>
@@ -780,13 +824,13 @@
     document.documentElement.appendChild(host);
     activeTooltipHost = host;
 
-    const btnSpeak = card.querySelector('.btn-speak');
+    const btnSpeakEn = card.querySelector('.btn-speak-en');
     const btnCopy = card.querySelector('.btn-copy');
     const btnClose = card.querySelector('.close-btn');
 
-    btnSpeak.addEventListener('click', (e) => {
+    btnSpeakEn.addEventListener('click', (e) => {
       e.stopPropagation();
-      speakEnglishWord(word, btnSpeak);
+      speakEnglishWord(word, btnSpeakEn);
     });
 
     btnClose.addEventListener('click', (e) => {
@@ -811,7 +855,7 @@
 
         if (response && response.success && response.data) {
           const data = response.data;
-          const primaryBangla = data.primary || 'অনুবাদ পাওয়া যায়নি';
+          const primaryBangla = data.primary || 'অনুবাদ পাওয়া যায়নি';
 
           if (data.source === 'offline') {
             const wordGroup = card.querySelector('.word-group');
@@ -846,12 +890,37 @@
               .join('');
           }
 
+          // Build Bangla speak button HTML
+          const bnBtnDisabled = !banglaVoiceAvailable;
+          const bnBtnTitle = bnBtnDisabled
+            ? 'No Bangla voice installed on this device.'
+            : 'বাংলা উচ্চারণ শুনুন (Bangla)';
+          const bnBtnAriaLabel = bnBtnDisabled
+            ? 'No Bangla voice installed on this device.'
+            : 'Pronounce Bangla translation';
+
           body.innerHTML = `
-            <div class="bangla-primary">${escapeHtml(primaryBangla)}</div>
+            <div class="bangla-result-row">
+              <div class="bangla-primary">${escapeHtml(primaryBangla)}</div>
+              <button class="icon-btn btn-speak-bn" title="${escapeHtml(bnBtnTitle)}" aria-label="${escapeHtml(bnBtnAriaLabel)}" ${bnBtnDisabled ? 'disabled' : ''}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                </svg>
+              </button>
+            </div>
             ${dictHTML}
           `;
+
+          // Attach Bangla speak event
+          const btnSpeakBn = body.querySelector('.btn-speak-bn');
+          if (btnSpeakBn && !bnBtnDisabled) {
+            btnSpeakBn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              speakBanglaWord(primaryBangla, btnSpeakBn);
+            });
+          }
         } else {
-          const errMsg = response?.error || 'অনুবাদ লোড করা যায়নি।';
+          const errMsg = response?.error || 'অনুবাদ লোড করা যায়নি।';
           body.innerHTML = `
             <div class="error-state">${escapeHtml(errMsg)}</div>
           `;
