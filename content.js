@@ -11,6 +11,64 @@
   let scrollStartY = 0;
   let scrollStartX = 0;
 
+  /**
+   * Injects local extension @font-face definitions into document.head once per page.
+   */
+  function ensureLocalFontsInjected() {
+    const fontStyleId = 'eng-bn-translator-fonts';
+    if (document.getElementById(fontStyleId)) return;
+
+    try {
+      const inter400Url = chrome.runtime.getURL('fonts/inter-400.woff2');
+      const inter600Url = chrome.runtime.getURL('fonts/inter-600.woff2');
+      const hind400Url = chrome.runtime.getURL('fonts/hind-siliguri-400.woff2');
+      const hind600Url = chrome.runtime.getURL('fonts/hind-siliguri-600.woff2');
+
+      const style = document.createElement('style');
+      style.id = fontStyleId;
+      style.textContent = `
+        @font-face {
+          font-family: 'Inter';
+          font-style: normal;
+          font-weight: 400;
+          font-display: swap;
+          src: url('${inter400Url}') format('woff2');
+        }
+        @font-face {
+          font-family: 'Inter';
+          font-style: normal;
+          font-weight: 600;
+          font-display: swap;
+          src: url('${inter600Url}') format('woff2');
+        }
+        @font-face {
+          font-family: 'Hind Siliguri';
+          font-style: normal;
+          font-weight: 400;
+          font-display: swap;
+          src: url('${hind400Url}') format('woff2');
+        }
+        @font-face {
+          font-family: 'Hind Siliguri';
+          font-style: normal;
+          font-weight: 600;
+          font-display: swap;
+          src: url('${hind600Url}') format('woff2');
+        }
+      `;
+
+      const target = document.head || document.documentElement;
+      if (target) {
+        target.appendChild(style);
+      }
+    } catch (err) {
+      console.warn('Failed to inject local fonts stylesheet:', err);
+    }
+  }
+
+  // Attempt initial font registration
+  ensureLocalFontsInjected();
+
   // Retrieve initial enabled state from chrome.storage.local
   chrome.storage.local.get({ enabled: true }, (result) => {
     if (chrome.runtime.lastError) {
@@ -185,6 +243,9 @@
    * @param {DOMRect} selectionRect
    */
   function renderShadowTooltip(word, selectionRect) {
+    // Ensure font stylesheet is injected into head
+    ensureLocalFontsInjected();
+
     // Create isolation host element
     const host = document.createElement('div');
     host.id = 'eng-bn-translator-host';
@@ -205,8 +266,6 @@
     // Stylesheet inside Shadow DOM
     const style = document.createElement('style');
     style.textContent = `
-      @import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
-
       * {
         box-sizing: border-box;
         margin: 0;
@@ -223,7 +282,7 @@
         border-radius: 12px;
         box-shadow: 0 16px 36px -4px rgba(0, 0, 0, 0.55), 0 8px 16px -6px rgba(0, 0, 0, 0.45);
         color: #f8fafc;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
         font-size: 13px;
         line-height: 1.4;
         padding: 12px 14px;
@@ -344,7 +403,7 @@
         align-items: center;
         gap: 10px;
         color: #94a3b8;
-        font-family: 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
+        font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, sans-serif;
         font-size: 14px;
         padding: 6px 0;
       }
@@ -364,7 +423,7 @@
 
       /* Bangla Primary Result */
       .bangla-primary {
-        font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'SolaimanLipi', 'Vrinda', sans-serif;
+        font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, 'SolaimanLipi', 'Vrinda', sans-serif;
         font-size: 20px;
         font-weight: 700;
         color: #38bdf8;
@@ -394,7 +453,7 @@
       }
 
       .pos-terms {
-        font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'SolaimanLipi', 'Vrinda', sans-serif;
+        font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, 'SolaimanLipi', 'Vrinda', sans-serif;
         font-size: 13px;
         color: #cbd5e1;
         line-height: 1.5;
@@ -405,7 +464,7 @@
       .error-state {
         color: #f87171;
         font-size: 13px;
-        font-family: 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
+        font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, sans-serif;
         padding: 4px 0;
       }
     `;

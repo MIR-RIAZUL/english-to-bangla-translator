@@ -8,6 +8,7 @@ A high-performance, production-ready Google Chrome extension that provides insta
 
 - **Double-Click Instant Translation**: Double-click any English word on any webpage to see its Bangla meaning in a floating, non-intrusive tooltip.
 - **Shadow DOM Style Isolation**: The floating tooltip is encapsulated within a Shadow DOM container with `z-index: 2147483647`, ensuring host webpage styles never break the translation UI.
+- **100% Offline Bundled Fonts**: Bundled `Inter` and `Hind Siliguri` (400, 600) WOFF2 fonts with robust system-font fallbacks (`Segoe UI`, `Arial`, `Noto Sans Bengali`, `sans-serif`) and zero external Google Font CDN dependencies.
 - **Audio Pronunciation**: High-clarity native speech pronunciation using the Web Speech API (`window.speechSynthesis`).
 - **Comprehensive Meanings & Parts of Speech**: Displays primary Bengali translation plus part-of-speech breakdowns (nouns, verbs, adjectives, etc.) and alternative synonyms.
 - **CORS-Free Architecture**: Translation requests execute inside the Background Service Worker (`background.js`) to bypass page-level Content Security Policies (CSP) and CORS restrictions.
@@ -30,12 +31,13 @@ A high-performance, production-ready Google Chrome extension that provides insta
 
 ---
 
-## 🔒 Permissions & Host Permissions Explanation
+## 🔒 Permissions & Resources Explanation
 
 The extension requests only minimal permissions necessary for its core operation:
 
 - `storage`: Required to save user preferences (`settings` object), toggle status (`enabled`), and persistent lookup history (`recentWords`) across browser sessions using `chrome.storage.local`.
 - `activeTab`: Required to interact with the current webpage context when triggered and open extension options cleanly.
+- `web_accessible_resources (fonts/*)`: Required to permit web pages to load bundled local extension fonts (`inter-*.woff2`, `hind-siliguri-*.woff2`) declared via injected `@font-face` rules.
 - `https://translate.googleapis.com/*`: Required to fetch fast translations and comprehensive parts of speech from Google GTX endpoints.
 - `https://api.mymemory.translated.net/*`: Required to provide resilient fallback translations when Google's endpoints are unreachable.
 
@@ -50,11 +52,16 @@ mosuehoberTransalation/
 ├── background.js       # Background service worker (API requests, caching, migration)
 ├── content.js          # DOM double-click listener & Shadow DOM tooltip
 ├── popup.html          # Toolbar extension control panel with settings button
-├── popup.css           # Modern 320px styling with Bengali typography
+├── popup.css           # Modern 320px styling with local font declarations
 ├── popup.js            # Toolbar logic, toggle state, quick translator & recent words
 ├── options.html        # Full settings & preferences page
-├── options.css         # Styling for options page matching popup dark theme
+├── options.css         # Styling for options page with local font declarations
 ├── options.js          # Options controller with automatic saving & reset
+├── fonts/              # Bundled local WOFF2 font files
+│   ├── inter-400.woff2
+│   ├── inter-600.woff2
+│   ├── hind-siliguri-400.woff2
+│   └── hind-siliguri-600.woff2
 ├── icons/              # Valid PNG extension icons
 │   ├── icon-16.png     # 16x16px icon
 │   ├── icon-48.png     # 48x48px icon
