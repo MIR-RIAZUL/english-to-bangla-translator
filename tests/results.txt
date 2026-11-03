@@ -1,0 +1,79 @@
+=================================================================
+  PHASE B: AUTOMATED LOGIC TESTS (Node.js)
+=================================================================
+
+[SETUP NOTE] lemmatize.js, settings.js, and background.js loaded directly via Node VM.
+[SETUP NOTE] history.js logic (search/filter, CSV export) and escapeHtml isolated for testing (enclosed in DOMContentLoaded in source).
+
+--- Suite 1: Lemmatizer ---
+  [PASS] 1.1: lemmatize("running") includes candidate "run"
+  [PASS] 1.2: lemmatize("boxes") includes candidate "box"
+  [PASS] 1.3: lemmatize("studies") includes candidate "study"
+  [PASS] 1.4: lemmatize("studied") includes candidate "study"
+  [PASS] 1.5: lemmatize("stopped") includes candidate "stop"
+  [PASS] 1.6: lemmatize("cats") includes candidate "cat"
+
+--- Suite 2: Mode Detection (detectMode) ---
+  [PASS] 2.1: detectMode("hello") === "word"
+  [PASS] 2.2: detectMode("good morning") === "word"
+  [PASS] 2.3: detectMode("three words here") === "word"
+  [PASS] 2.4: detectMode("this is a long sentence") === "sentence"
+  [PASS] 2.5: detectMode("four words are here") === "sentence"
+
+--- Suite 3: Chunking & Boundary Splitting ---
+  [PASS] 3.1: 4000-char multi-sentence text splits into multiple chunks (3 chunks)
+  [PASS] 3.2: No chunk exceeds GTX 1500 char limit (max: 1500)
+  [PASS] 3.3: No chunk exceeds MyMemory 450 char limit (max: 446)
+  [PASS] 3.4: Joined chunks equal original text after reconstruction
+  [FAIL] 3.5: One huge sentence (>1500 chars) is split so no chunk exceeds 1500 limit -> Got chunk count: 1, max chunk length: 3199 (sentence was not split by splitAtSentenceBoundaries)
+  [FAIL] 3.6: One huge sentence (>450 chars) is split so no chunk exceeds 450 limit -> Got chunk count: 1, max chunk length: 3199 (sentence was not split by splitAtSentenceBoundaries)
+
+--- Suite 4: GTX Parser ---
+  [PASS] 4.1: GTX sentence response joins 3 segments into full translation
+  [PASS] 4.2: GTX sentence mode omits dictionary POS groups
+  [PASS] 4.3: GTX word response extracts primary translation "বই"
+  [PASS] 4.4: GTX word response parses part-of-speech dictionary groups correctly
+
+--- Suite 5: MyMemory Parser ---
+  [PASS] 5.1: MyMemory extracts primary translatedText
+  [PASS] 5.2: MyMemory parses unique alternative terms excluding primary match
+
+--- Suite 6: Settings Merge ---
+  [PASS] 6.1: Settings merge preserves stored overrides and fills all default keys
+  [FAIL] 6.2: Settings merge ignores unknown/unrecognized keys not in DEFAULT_SETTINGS -> unknownKey in settings: true, maliciousPayload in settings: true
+
+--- Suite 7: History Logic ---
+  [PASS] 7.1: Legacy history entry migrated with default count (1), type ("word"), and timestamp
+  [PASS] 7.2: Duplicate word increments lookup count and moves record to top of history
+  [PASS] 7.3: History trims to settings.historyLimit (10 items retained when 15 added)
+  [PASS] 7.4: Filter by English field matches word property only ("book", "notebook")
+  [PASS] 7.5: Filter by Bangla field matches translation property only ("বই")
+  [PASS] 7.6: Filter by Both fields searches word and translation properties
+
+--- Suite 8: Cache Logic (LRU & Key Formatting) ---
+  [PASS] 8.1: Sentence cache key formats as "first200chars|totalLength"
+  [PASS] 8.2: Word cache key formats as trimmed lowercase word
+  [PASS] 8.3: LRU eviction drops oldest entry ("entry_0") when cache limit (300) is reached
+
+--- Suite 9: HTML Sanitization (escapeHtml) ---
+  [PASS] 9.1: escapeHtml replaces <, >, ", ', and & characters with corresponding HTML entities
+  [PASS] 9.2: No unescaped dangerous HTML delimiter characters remain in output
+
+--- Suite 10: CSV Export ---
+  [PASS] 10.1: CSV content begins with UTF-8 BOM (\uFEFF) for Excel/Unicode compatibility
+  [PASS] 10.2: Double quotes within values are escaped as double quotes ("")
+  [PASS] 10.3: Values containing commas are enclosed in full quotation marks
+  [PASS] 10.4: Bengali Unicode characters are preserved accurately in CSV output
+  [PASS] 10.5: CSV rows use standard CRLF (\r\n) line separators
+
+=================================================================
+TEST SUMMARY: Total: 41 | Passed: 38 | Failed: 3
+=================================================================
+
+FAILING CASES ANALYSIS:
+1. Test [3.5] "One huge sentence (>1500 chars) is split so no chunk exceeds 1500 limit"
+   Cause: Got chunk count: 1, max chunk length: 3199 (sentence was not split by splitAtSentenceBoundaries)
+2. Test [3.6] "One huge sentence (>450 chars) is split so no chunk exceeds 450 limit"
+   Cause: Got chunk count: 1, max chunk length: 3199 (sentence was not split by splitAtSentenceBoundaries)
+3. Test [6.2] "Settings merge ignores unknown/unrecognized keys not in DEFAULT_SETTINGS"
+   Cause: unknownKey in settings: true, maliciousPayload in settings: true
