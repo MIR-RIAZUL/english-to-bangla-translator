@@ -481,6 +481,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         historyLimitInput.value = val;
         currentSettings.historyLimit = val;
         await saveSettings({ historyLimit: val });
+
+        // Enforce limit on current stored recentWords
+        const { recentWords = [] } = await chrome.storage.local.get('recentWords');
+        if (Array.isArray(recentWords) && recentWords.length > val) {
+          await chrome.storage.local.set({ recentWords: recentWords.slice(0, val) });
+        }
+
         showSaveConfirmation();
       } catch (err) {
         console.error('Save error:', err);

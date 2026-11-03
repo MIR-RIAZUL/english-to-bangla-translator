@@ -9,7 +9,7 @@ A high-performance, production-ready Google Chrome extension that provides insta
 - **Double-Click Instant Translation**: Double-click any English word on any webpage to see its Bangla meaning in a floating, non-intrusive tooltip.
 - **Dual-Language Text-to-Speech (TTS)**:
   - English speech button (`🔊`) to hear native English pronunciation.
-  - Bangla speech button (`🔊`) next to the primary Bengali translation in both tooltips and popup.
+  - Bangla speech button (`🔊`) next to the primary Bengali translation in tooltips, popup, and history.
   - Automatic Bangla voice detection preferring `bn-BD` (Bangladesh) followed by `bn-IN` (India).
   - Graceful fallback with informative disabled state tooltip when no Bangla voice is installed on the host operating system.
   - Speech playback rates for both languages respect user-configured `settings.speechRate`.
@@ -17,6 +17,14 @@ A high-performance, production-ready Google Chrome extension that provides insta
   - `Alt+T`: Translate the currently highlighted text on any webpage.
   - `Alt+Shift+T`: Toggle extension translation on or off globally.
   - Full shortcut customization via Chrome's native shortcuts manager (`chrome://extensions/shortcuts`).
+- **Translation History & Search Dashboard**:
+  - Dedicated full-page history management panel (`history.html`).
+  - Search history in real-time with instant keyword matching.
+  - Filter lookups by English, Bangla, or both languages.
+  - Sort entries by most recent, most looked up (frequency count), or alphabetical order (A–Z).
+  - Export full history to CSV (with UTF-8 BOM `\uFEFF` for clean Excel/Sheets rendering) or structured JSON.
+  - Delete individual lookups or clear entire history with confirmation safeguards.
+  - Rich data model storing `{ word, translation, timestamp, count }` with automatic count incrementing and timestamp refreshing on repeat lookups, trimmed to user-defined `historyLimit`.
 - **Shadow DOM Style Isolation**: The floating tooltip is encapsulated within a Shadow DOM container with `z-index: 2147483647`, ensuring host webpage styles never break the translation UI.
 - **100% Offline Bundled Fonts**: Bundled `Inter` and `Hind Siliguri` (400, 600) WOFF2 fonts with robust system-font fallbacks (`Segoe UI`, `Arial`, `Noto Sans Bengali`, `sans-serif`) and zero external Google Font CDN dependencies.
 - **Flexible Provider Priority Order**:
@@ -42,7 +50,8 @@ A high-performance, production-ready Google Chrome extension that provides insta
 - **Toolbar Control Panel (Popup UI)**:
   - Master **Enable / Disable Toggle Switch** (synced across tabs in real-time).
   - **Quick Translate Box** for translating typed or pasted words/sentences.
-  - **Recent Words History** showing the last 5 lookups with pronunciation and copy buttons.
+  - **Recent Words List** displaying the 5 most recent lookups with audio playback, copy buttons, and lookup frequency badges.
+  - **View all** history link navigating straight to the History dashboard.
   - Settings (⚙) button linking directly to the full Options page.
   - One-click translation copying with visual feedback.
 - **Full Options & Settings Panel (v2.0.0)**:
@@ -50,7 +59,7 @@ A high-performance, production-ready Google Chrome extension that provides insta
   - Reorderable translation provider priority list (`official`, `gtx`, `mymemory`, `offline`).
   - Speech synthesis rate customization with audio test button.
   - Theme switching and custom highlight color selection.
-  - History retention limit configuration and one-click default reset.
+  - History retention limit configuration with live trimming and one-click default reset.
 
 ---
 
@@ -95,11 +104,14 @@ mosuehoberTransalation/
 ├── tts.js              # Speech synthesis module with Bangla voice detection (bn-BD / bn-IN)
 ├── settings.js         # Shared settings helper & default configuration
 ├── lemmatize.js        # Morphological root extractor (-ing, -ed, plurals, doubled consonants)
-├── background.js       # Background service worker (caching, official API, offline fallback, commands listener)
+├── background.js       # Background service worker (caching, official API, offline fallback, commands listener, history normalization)
 ├── content.js          # DOM double-click & hover listener, Shadow DOM tooltip, shortcut handler
-├── popup.html          # Toolbar extension control panel with settings button & Bangla audio
+├── popup.html          # Toolbar extension control panel with settings button, Bangla audio, and history link
 ├── popup.css           # Modern 320px styling with local font declarations & playing states
-├── popup.js            # Toolbar logic, toggle state, quick translator & recent words
+├── popup.js            # Toolbar logic, toggle state, quick translator & recent words preview
+├── history.html        # Dedicated full-page translation history manager & export interface
+├── history.css         # History dashboard styling with responsive grid, dark theme & animations
+├── history.js          # History live search, multi-field filtering, sorting, CSV/JSON export & speech
 ├── options.html        # Full settings & preferences page with API key tester & shortcuts launcher
 ├── options.css         # Styling for options page with local font declarations
 ├── options.js          # Options controller with automatic saving & key tester
@@ -150,9 +162,19 @@ mosuehoberTransalation/
    - Click the ⚙ (gear) icon in the header to open the Options page.
    - Type or paste any word or sentence in the **Quick Translate** box and press **Enter** or click **Translate**.
    - Listen to the English input or Bangla translation via their respective speaker buttons.
-   - Review your **Recent Words** or click any word to reload it in the translator.
+   - Review your **Recent Words** (showing frequency count badges) or click **View all** to open the full History dashboard.
 
-4. **In the Options Page**:
+4. **In the History Dashboard**:
+   - Open by clicking **View all** in the popup or navigating to `chrome-extension://<id>/history.html`.
+   - Use the live search bar to filter by word or translation in real-time.
+   - Narrow results using the language filter dropdown (English, Bangla, or Both).
+   - Sort entries by "Most Recent", "Most Looked Up", or "Alphabetical (A–Z)".
+   - Play audio for English and Bengali words directly from each history item card.
+   - Click **Export CSV** to download a spreadsheet-ready file (with UTF-8 BOM encoding for proper Bangla text display).
+   - Click **Export JSON** to download a backup of your lookup records.
+   - Remove individual records using the delete button, or click **Clear All** to reset history.
+
+5. **In the Options Page**:
    - Open options by right-clicking the extension icon and choosing **Options**, or via the gear icon in the popup.
    - Adjust interaction triggers, provider priorities, speech rate, colors, and limits.
    - Click **Configure Shortcuts** to view or customize browser keyboard shortcuts in Chrome.

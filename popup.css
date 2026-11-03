@@ -529,6 +529,12 @@ textarea#quickInput::placeholder {
 }
 
 /* Recent Words List */
+.recent-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .text-link-btn {
   background: none;
   border: none;
@@ -538,10 +544,15 @@ textarea#quickInput::placeholder {
   cursor: pointer;
   padding: 2px 4px;
   border-radius: 4px;
+  text-decoration: none;
   transition: color 0.15s ease;
 }
 
 .text-link-btn:hover {
+  color: var(--accent-indigo);
+}
+
+#clearRecentBtn.text-link-btn:hover {
   color: var(--accent-rose);
 }
 

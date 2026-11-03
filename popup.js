@@ -2,7 +2,7 @@
  * Popup Script
  * Handles toggle state persistence, quick manual translation,
  * speech synthesis pronunciation (English and Bangla), options navigation,
- * and recent word history rendering.
+ * and recent word history rendering with view-all navigation.
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const recentList = document.getElementById('recentList');
   const clearRecentBtn = document.getElementById('clearRecentBtn');
+  const viewAllHistoryBtn = document.getElementById('viewAllHistoryBtn');
 
   let currentTranslatedText = '';
   let banglaVoiceAvailable = false;
@@ -47,6 +48,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       } catch (err) {
         console.error('Failed to open options page:', err);
+      }
+    });
+  }
+
+  // Open History page
+  if (viewAllHistoryBtn) {
+    viewAllHistoryBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      try {
+        chrome.tabs.create({ url: chrome.runtime.getURL('history.html') });
+      } catch (err) {
+        window.open(chrome.runtime.getURL('history.html'));
       }
     });
   }
@@ -314,6 +327,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   /**
    * Renders the recent translated words in the popup card.
+   * Keeps the top 5 lookups.
    * @param {Array<Object>} list
    */
   function renderRecentWords(list) {
@@ -325,10 +339,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
       `;
       clearRecentBtn.style.display = 'none';
+      if (viewAllHistoryBtn) viewAllHistoryBtn.style.display = 'none';
       return;
     }
 
     clearRecentBtn.style.display = 'inline-block';
+    if (viewAllHistoryBtn) viewAllHistoryBtn.style.display = 'inline-block';
+
     const recentFive = list.slice(0, 5);
 
     recentList.innerHTML = recentFive
@@ -419,6 +436,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Clear Recent History
   clearRecentBtn.addEventListener('click', async () => {
+    const confirmed = window.confirm('Are you sure you want to clear your recent translation history?');
+    if (!confirmed) return;
+
     try {
       await chrome.storage.local.set({ recentWords: [] });
       renderRecentWords([]);
