@@ -3,7 +3,7 @@
  * Handles translation API calls (bypassing webpage CORS/CSP restrictions),
  * in-memory and persistent caching, lemmatization, offline dictionary fallbacks,
  * official Google Cloud Translation API v2 integration, keyboard shortcuts (commands),
- * and persistence of recent lookups with lookup counts and timestamps.
+ * sentence/paragraph translation with chunking, and persistence of recent word lookups.
  */
 
 try {
@@ -20,40 +20,64 @@ const MAX_CACHE_ENTRIES = 300;
 let offlineDict = null;
 
 /**
- * Retrieve cached translation if present in memory.
+ * Determines whether a piece of text should be treated as a single word/phrase
+ * or as a sentence/paragraph to be translated as prose.
+ * @param {string} text - Trimmed input text.
+ * @returns {"word"|"sentence"} Mode string.
+ */
+function detectMode(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  return words.length <= 3 ? 'word' : 'sentence';
+}
+
+/**
+ * Builds the cache key for a given text.
+ * Words: lowercase full text.
+ * Sentences: first 200 chars (lowercase) + "|" + total length.
  * @param {string} text
+ * @param {"word"|"sentence"} mode
+ * @returns {string}
+ */
+function buildCacheKey(text, mode) {
+  const trimmed = text.trim().toLowerCase();
+  if (mode === 'sentence') {
+    return trimmed.slice(0, 200) + '|' + trimmed.length;
+  }
+  return trimmed;
+}
+
+/**
+ * Retrieve cached translation if present in memory.
+ * @param {string} cacheKey
  * @returns {object|null}
  */
-function getCachedTranslation(text) {
-  const key = text.trim().toLowerCase();
-  return translationCache.get(key) || null;
+function getCachedTranslation(cacheKey) {
+  return translationCache.get(cacheKey) || null;
 }
 
 /**
  * Store translation in the in-memory cache.
- * @param {string} text
+ * @param {string} cacheKey
  * @param {object} data
  */
-function setCachedTranslation(text, data) {
-  const key = text.trim().toLowerCase();
+function setCachedTranslation(cacheKey, data) {
   if (translationCache.size >= MAX_CACHE_ENTRIES) {
     const oldestKey = translationCache.keys().next().value;
     translationCache.delete(oldestKey);
   }
-  translationCache.set(key, data);
+  translationCache.set(cacheKey, data);
 }
 
 /**
  * Retrieves cached translation from persistent storage (chrome.storage.local key 'tcache').
- * @param {string} text
+ * @param {string} cacheKey
  * @returns {Promise<object|null>}
  */
-async function getPersistentCachedTranslation(text) {
+async function getPersistentCachedTranslation(cacheKey) {
   try {
-    const key = text.trim().toLowerCase();
     const { tcache = {} } = await chrome.storage.local.get('tcache');
-    if (tcache && tcache[key] && tcache[key].data) {
-      return tcache[key].data;
+    if (tcache && tcache[cacheKey] && tcache[cacheKey].data) {
+      return tcache[cacheKey].data;
     }
     return null;
   } catch (err) {
@@ -65,18 +89,16 @@ async function getPersistentCachedTranslation(text) {
 /**
  * Saves translation into persistent storage cache (chrome.storage.local key 'tcache').
  * Enforces maximum 1,000 entries by evicting oldest records.
- * @param {string} text
+ * @param {string} cacheKey
  * @param {object} data
  * @returns {Promise<void>}
  */
-async function setPersistentCachedTranslation(text, data) {
+async function setPersistentCachedTranslation(cacheKey, data) {
   try {
-    const key = text.trim().toLowerCase();
     const { tcache = {} } = await chrome.storage.local.get('tcache');
 
     const keys = Object.keys(tcache);
     if (keys.length >= 1000) {
-      // Find oldest entry by timestamp and delete
       let oldestKey = keys[0];
       let oldestTime = tcache[oldestKey]?.timestamp || 0;
       for (let i = 1; i < keys.length; i++) {
@@ -90,7 +112,7 @@ async function setPersistentCachedTranslation(text, data) {
       delete tcache[oldestKey];
     }
 
-    tcache[key] = {
+    tcache[cacheKey] = {
       timestamp: Date.now(),
       data: data
     };
@@ -102,7 +124,7 @@ async function setPersistentCachedTranslation(text, data) {
 }
 
 /**
- * Loads bundled starter dictionary from data/dictionary.json
+ * Loads bundled starter dictionary from data/dictionary.json.
  * @returns {Promise<object>}
  */
 async function loadOfflineDictionary() {
@@ -147,8 +169,43 @@ async function fetchWithBackoff(url, options = {}, retries = 2, delay = 600) {
 }
 
 /**
- * Provider 1: Official Google Cloud Translation API v2 Basic
- * Endpoint: https://translation.googleapis.com/language/translate/v2
+ * Splits text into chunks at sentence boundaries (. ! ? \n) without exceeding maxLen.
+ * A single sentence that exceeds maxLen is included as its own oversized chunk.
+ * @param {string} text
+ * @param {number} maxLen
+ * @returns {string[]}
+ */
+function splitAtSentenceBoundaries(text, maxLen) {
+  // Split on sentence-ending punctuation followed by whitespace, or newlines
+  const sentencePattern = /(?<=[.!?\n])\s+/;
+  const rawSentences = text.split(sentencePattern).filter(Boolean);
+
+  const chunks = [];
+  let current = '';
+
+  for (const sentence of rawSentences) {
+    const candidate = current ? current + ' ' + sentence : sentence;
+    if (candidate.length <= maxLen) {
+      current = candidate;
+    } else {
+      if (current) {
+        chunks.push(current.trim());
+      }
+      // If a single sentence exceeds limit, push it as its own chunk
+      current = sentence;
+    }
+  }
+
+  if (current.trim()) {
+    chunks.push(current.trim());
+  }
+
+  return chunks.length > 0 ? chunks : [text];
+}
+
+/**
+ * Provider 1: Official Google Cloud Translation API v2 Basic.
+ * Handles sentences and words.
  * @param {string} text
  * @param {string} apiKey
  * @returns {Promise<object>} Unified result object.
@@ -195,13 +252,15 @@ async function translateOfficial(text, apiKey) {
 }
 
 /**
- * Provider 2: Google GTX Web Translation Endpoint
- * Comprehensive parts-of-speech & definitions
- * @param {string} text
- * @returns {Promise<object>} Unified result object.
+ * Translates a single chunk via GTX endpoint.
+ * In sentence mode, only the translation (dt=t) is requested; dictionary (dt=bd) is skipped.
+ * @param {string} chunk
+ * @param {"word"|"sentence"} mode
+ * @returns {Promise<{ primary: string, dictionary: Array }>}
  */
-async function translateGTX(text) {
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=bn&dt=t&dt=bd&q=${encodeURIComponent(text)}`;
+async function translateGTXChunk(chunk, mode) {
+  const dtParams = mode === 'sentence' ? '&dt=t' : '&dt=t&dt=bd';
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=bn${dtParams}&q=${encodeURIComponent(chunk)}`;
   const response = await fetchWithBackoff(url);
 
   if (!response.ok) {
@@ -223,23 +282,56 @@ async function translateGTX(text) {
   }
 
   const dictionaryMeanings = [];
-  if (Array.isArray(data[1])) {
+  if (mode === 'word' && Array.isArray(data[1])) {
     for (const entry of data[1]) {
       const partOfSpeech = entry[0] || 'meaning';
       const terms = Array.isArray(entry[1]) ? entry[1] : [];
       if (terms.length > 0) {
-        dictionaryMeanings.push({
-          pos: partOfSpeech,
-          terms: terms
-        });
+        dictionaryMeanings.push({ pos: partOfSpeech, terms: terms });
       }
     }
   }
 
+  return { primary: primaryBangla, dictionary: dictionaryMeanings };
+}
+
+/**
+ * Provider 2: Google GTX Web Translation Endpoint.
+ * For sentence mode: splits text into ≤1500-char chunks at sentence boundaries,
+ * translates each, and joins results. Skips dictionary (dt=bd) in sentence mode.
+ * For word mode: behavior unchanged — full dt=t + dt=bd with dictionary parsing.
+ * @param {string} text
+ * @param {"word"|"sentence"} mode
+ * @returns {Promise<object>} Unified result object.
+ */
+async function translateGTX(text, mode = 'word') {
+  const GTX_CHUNK_MAX = 1500;
+
+  if (mode === 'sentence' && text.length > GTX_CHUNK_MAX) {
+    const chunks = splitAtSentenceBoundaries(text, GTX_CHUNK_MAX);
+    const parts = [];
+    for (const chunk of chunks) {
+      const { primary } = await translateGTXChunk(chunk, 'sentence');
+      parts.push(primary);
+    }
+    const joined = parts.join(' ').trim();
+    if (!joined) throw new Error('Google GTX returned empty translation');
+    return {
+      originalText: text,
+      primary: joined,
+      dictionary: [],
+      sourceLang: 'en',
+      provider: 'gtx',
+      source: 'online'
+    };
+  }
+
+  // Word mode or short sentence — single request
+  const { primary, dictionary } = await translateGTXChunk(text, mode);
   return {
     originalText: text,
-    primary: primaryBangla,
-    dictionary: dictionaryMeanings,
+    primary: primary,
+    dictionary: dictionary,
     sourceLang: 'en',
     provider: 'gtx',
     source: 'online'
@@ -247,15 +339,48 @@ async function translateGTX(text) {
 }
 
 /**
- * Provider 3: Offline Dictionary with Lemmatization
- * Resolves candidate roots via lemmatize.js and looks up definitions in data/dictionary.json
+ * Provider 3: Offline Dictionary with Lemmatization.
+ * For word mode: standard single-word lookup.
+ * For sentence mode (offline fallback): translates each token individually,
+ * keeping unknown words as-is, and marks result as approximate.
  * @param {string} text
+ * @param {"word"|"sentence"} [mode="word"]
  * @returns {Promise<object>} Unified result object.
  */
-async function translateOffline(text) {
+async function translateOffline(text, mode = 'word') {
   const dict = await loadOfflineDictionary();
-  const lower = text.trim().toLowerCase();
 
+  if (mode === 'sentence') {
+    // Word-by-word translation of each token; unknown tokens kept as-is
+    const tokens = text.trim().split(/\s+/);
+    const translated = tokens.map((token) => {
+      const clean = token.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, '').toLowerCase();
+      if (!clean) return token;
+      const candidates = typeof lemmatize === 'function' ? lemmatize(clean) : [clean];
+      for (const candidate of candidates) {
+        if (dict[candidate] && Array.isArray(dict[candidate].bn) && dict[candidate].bn[0]) {
+          return dict[candidate].bn[0];
+        }
+      }
+      return token; // Unknown: keep original
+    });
+    const primary = translated.join(' ').trim();
+    if (!primary) {
+      throw new Error('Offline sentence translation produced no output');
+    }
+    return {
+      originalText: text,
+      primary: primary,
+      dictionary: [],
+      sourceLang: 'en',
+      provider: 'offline',
+      source: 'offline',
+      approximate: true
+    };
+  }
+
+  // Word mode: standard single-entry lookup
+  const lower = text.trim().toLowerCase();
   const candidates = typeof lemmatize === 'function' ? lemmatize(lower) : [lower];
 
   for (const candidate of candidates) {
@@ -268,10 +393,7 @@ async function translateOffline(text) {
       const dictionaryMeanings = [];
       const poses = Array.isArray(entry.pos) ? entry.pos : ['meaning'];
       poses.forEach((p) => {
-        dictionaryMeanings.push({
-          pos: p,
-          terms: bnMeanings
-        });
+        dictionaryMeanings.push({ pos: p, terms: bnMeanings });
       });
 
       return {
@@ -285,42 +407,74 @@ async function translateOffline(text) {
     }
   }
 
-  throw new Error(`"${text}" শব্দটি অফলাইন ডিকশনারিতে পাওয়া যায়নি (Word not in offline dictionary)`);
+  throw new Error(`"${text}" শব্দটি অফলাইন ডিকশনারিতে পাওয়া যায়নি (Word not in offline dictionary)`);
 }
 
 /**
- * Provider 4: MyMemory Translation API Fallback
+ * Provider 4: MyMemory Translation API Fallback.
+ * Enforces 450-character chunks (MyMemory limit is ~500 chars).
+ * Joins translated chunks with a space for sentence mode.
  * @param {string} text
+ * @param {"word"|"sentence"} [mode="word"]
  * @returns {Promise<object>} Unified result object.
  */
-async function translateMyMemory(text) {
+async function translateMyMemory(text, mode = 'word') {
+  const MM_CHUNK_MAX = 450;
+
+  /**
+   * Translates a single chunk against MyMemory API.
+   * @param {string} chunk
+   * @returns {Promise<string>} Translated text.
+   */
+  async function translateMMChunk(chunk) {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk)}&langpair=en|bn`;
+    const response = await fetchWithBackoff(url);
+    if (!response.ok) {
+      throw new Error(`MyMemory error: HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    const primary = data?.responseData?.translatedText?.trim();
+    if (!primary) throw new Error('MyMemory returned empty translation');
+    return primary;
+  }
+
+  if (text.length > MM_CHUNK_MAX) {
+    const chunks = splitAtSentenceBoundaries(text, MM_CHUNK_MAX);
+    const parts = [];
+    for (const chunk of chunks) {
+      const translated = await translateMMChunk(chunk);
+      parts.push(translated);
+    }
+    const joined = parts.join(' ').trim();
+    if (!joined) throw new Error('MyMemory returned empty translation');
+    return {
+      originalText: text,
+      primary: joined,
+      dictionary: [],
+      sourceLang: 'en',
+      provider: 'mymemory',
+      source: 'online'
+    };
+  }
+
+  // Short text — single request with optional alternatives
   const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|bn`;
   const response = await fetchWithBackoff(url);
-
   if (!response.ok) {
     throw new Error(`MyMemory error: HTTP ${response.status}`);
   }
-
   const data = await response.json();
   const primary = data?.responseData?.translatedText?.trim();
+  if (!primary) throw new Error('MyMemory returned empty translation');
 
-  if (!primary) {
-    throw new Error('MyMemory returned empty translation');
-  }
-
-  // Extract alternative translations if available
   const alternatives = [];
-  if (Array.isArray(data.matches)) {
+  if (mode === 'word' && Array.isArray(data.matches)) {
     const rawTerms = data.matches
       .map((m) => (m && m.translation ? m.translation.trim() : ''))
       .filter((t) => t && t.toLowerCase() !== primary.toLowerCase());
-
     const terms = [...new Set(rawTerms)].slice(0, 4);
     if (terms.length > 0) {
-      alternatives.push({
-        pos: 'alternate',
-        terms: terms
-      });
+      alternatives.push({ pos: 'alternate', terms: terms });
     }
   }
 
@@ -352,7 +506,8 @@ function normalizeHistoryItem(item) {
 }
 
 /**
- * Persist translated word to recent words history in chrome.storage.local.
+ * Persist a translated WORD to recent words history in chrome.storage.local.
+ * Sentences are never saved here.
  * Maintains { word, translation, timestamp, count } structure.
  * Increments count and updates timestamp if existing; trims to settings.historyLimit.
  * @param {string} word
@@ -375,7 +530,6 @@ async function saveRecentWord(word, translation) {
       ? settings.historyLimit
       : 200;
 
-    // Migrate any legacy items to ensure uniform shape
     const history = rawList.map(normalizeHistoryItem);
 
     const wordLower = trimmedWord.toLowerCase();
@@ -401,7 +555,6 @@ async function saveRecentWord(word, translation) {
     }
 
     history.unshift(updatedEntry);
-
     const trimmedHistory = history.slice(0, historyLimit);
     await chrome.storage.local.set({ recentWords: trimmedHistory });
   } catch (error) {
@@ -410,13 +563,27 @@ async function saveRecentWord(word, translation) {
 }
 
 /**
- * Unified Translation Handler executing according to providerOrder:
- * 1. Memory cache
- * 2. Persistent storage cache ('tcache', max 1000)
- * 3. Provider Order execution (official -> gtx -> mymemory -> offline)
+ * Unified Translation Handler.
+ * Determines mode (word vs sentence), enforces maxChars limit, manages caching,
+ * runs provider chain, and normalizes response shape.
+ *
+ * Response shape:
+ * {
+ *   ok: boolean,
+ *   mode: "word"|"sentence",
+ *   original: string,
+ *   primary: string,          // same as translation
+ *   translation: string,
+ *   dictionary: Array,
+ *   source: "cache"|"online"|"offline",
+ *   provider: string,
+ *   truncated: boolean,
+ *   approximate: boolean,
+ *   error: string|null
+ * }
  *
  * @param {string} text
- * @param {boolean} isDoubleClick
+ * @param {boolean} isDoubleClick - When true, saves word-mode results to recentWords.
  * @returns {Promise<object>}
  */
 async function handleTranslation(text, isDoubleClick = false) {
@@ -425,37 +592,69 @@ async function handleTranslation(text, isDoubleClick = false) {
     throw new Error('No text provided for translation');
   }
 
+  // Retrieve settings for maxChars, providerOrder, apiKey, offlineEnabled
+  const settings = typeof getSettings === 'function' ? await getSettings() : (typeof DEFAULT_SETTINGS !== 'undefined' ? DEFAULT_SETTINGS : {});
+  const maxChars = (typeof settings.maxChars === 'number' && settings.maxChars > 0) ? settings.maxChars : 3000;
+
+  // Enforce maxChars limit
+  let inputText = trimmed;
+  let truncated = false;
+  if (inputText.length > maxChars) {
+    inputText = inputText.slice(0, maxChars);
+    truncated = true;
+  }
+
+  const mode = detectMode(inputText);
+  const cacheKey = buildCacheKey(inputText, mode);
+
+  // --- Inline helper to build normalized response ---
+  function buildResponse(result, fromCache = false) {
+    return {
+      ok: true,
+      mode: mode,
+      original: inputText,
+      primary: result.primary || '',
+      translation: result.primary || '',
+      dictionary: Array.isArray(result.dictionary) ? result.dictionary : [],
+      source: fromCache ? 'cache' : (result.source || 'online'),
+      provider: result.provider || 'unknown',
+      truncated: truncated,
+      approximate: !!result.approximate,
+      error: null
+    };
+  }
+
   // 1. Check in-memory cache
-  const memCached = getCachedTranslation(trimmed);
+  const memCached = getCachedTranslation(cacheKey);
   if (memCached) {
-    if (isDoubleClick) {
-      await saveRecentWord(trimmed, memCached.primary);
+    if (mode === 'word' && isDoubleClick) {
+      await saveRecentWord(inputText, memCached.primary);
     }
-    return { ...memCached, source: 'cache', fromCache: true };
+    return buildResponse(memCached, true);
   }
 
-  // 2. Check persistent cache (chrome.storage.local key 'tcache')
-  const persistentCached = await getPersistentCachedTranslation(trimmed);
+  // 2. Check persistent cache
+  const persistentCached = await getPersistentCachedTranslation(cacheKey);
   if (persistentCached) {
-    setCachedTranslation(trimmed, persistentCached);
-    if (isDoubleClick) {
-      await saveRecentWord(trimmed, persistentCached.primary);
+    setCachedTranslation(cacheKey, persistentCached);
+    if (mode === 'word' && isDoubleClick) {
+      await saveRecentWord(inputText, persistentCached.primary);
     }
-    return { ...persistentCached, source: 'cache', fromCache: true };
+    return buildResponse(persistentCached, true);
   }
 
-  // Retrieve current settings
-  const settings = typeof getSettings === 'function' ? await getSettings() : DEFAULT_SETTINGS;
-  const isOnline = typeof navigator.onLine === 'boolean' ? navigator.onLine : true;
+  const isOnline = typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean'
+    ? navigator.onLine
+    : true;
 
-  // If user is offline, skip directly to offline dictionary
+  // 3. If offline, skip directly to offline handler
   if (!isOnline) {
-    const offlineResult = await translateOffline(trimmed);
-    setCachedTranslation(trimmed, offlineResult);
-    if (isDoubleClick) {
-      await saveRecentWord(trimmed, offlineResult.primary);
+    const offlineResult = await translateOffline(inputText, mode);
+    setCachedTranslation(cacheKey, offlineResult);
+    if (mode === 'word' && isDoubleClick) {
+      await saveRecentWord(inputText, offlineResult.primary);
     }
-    return offlineResult;
+    return buildResponse(offlineResult);
   }
 
   const providerOrder = Array.isArray(settings.providerOrder) && settings.providerOrder.length > 0
@@ -470,30 +669,32 @@ async function handleTranslation(text, isDoubleClick = false) {
 
       if (provider === 'official') {
         const apiKey = (settings.apiKey || '').trim();
-        if (!apiKey) continue; // Skip if no API key configured
-        result = await translateOfficial(trimmed, apiKey);
+        if (!apiKey) continue;
+        result = await translateOfficial(inputText, apiKey);
       } else if (provider === 'gtx') {
-        result = await translateGTX(trimmed);
+        result = await translateGTX(inputText, mode);
       } else if (provider === 'mymemory') {
-        result = await translateMyMemory(trimmed);
+        result = await translateMyMemory(inputText, mode);
       } else if (provider === 'offline') {
         if (settings.offlineEnabled !== false) {
-          result = await translateOffline(trimmed);
+          result = await translateOffline(inputText, mode);
         }
       }
 
       if (result && result.primary) {
-        setCachedTranslation(trimmed, result);
+        setCachedTranslation(cacheKey, result);
 
-        // Store in persistent cache if from an online provider
+        // Only persist online results
         if (result.source === 'online') {
-          await setPersistentCachedTranslation(trimmed, result);
+          await setPersistentCachedTranslation(cacheKey, result);
         }
 
-        if (isDoubleClick) {
-          await saveRecentWord(trimmed, result.primary);
+        // Only save word-mode lookups to history
+        if (mode === 'word' && isDoubleClick) {
+          await saveRecentWord(inputText, result.primary);
         }
-        return result;
+
+        return buildResponse(result);
       }
     } catch (err) {
       lastError = err;
@@ -501,12 +702,19 @@ async function handleTranslation(text, isDoubleClick = false) {
     }
   }
 
-  // If all providers failed, throw friendly error
-  if (lastError) {
-    throw lastError;
+  // All online providers failed — attempt offline sentence approximation as last resort
+  if (mode === 'sentence') {
+    try {
+      const fallbackResult = await translateOffline(inputText, 'sentence');
+      setCachedTranslation(cacheKey, fallbackResult);
+      return buildResponse(fallbackResult);
+    } catch (offlineErr) {
+      console.warn('Offline sentence fallback also failed:', offlineErr.message);
+    }
   }
 
-  throw new Error('অনুবাদ পাওয়া যায়নি। অনুগ্রহ করে আপনার ইন্টারনেট সংযোগ পরীক্ষা করুন (Translation unavailable)');
+  if (lastError) throw lastError;
+  throw new Error('অনুবাদ পাওয়া যায়নি। অনুগ্রহ করে আপনার ইন্টারনেট সংযোগ পরীক্ষা করুন (Translation unavailable)');
 }
 
 // Runtime message listener
@@ -520,7 +728,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: error.message || 'Translation failed' });
       }
     })();
-    return true; // Keep message channel open for async response
+    return true;
   }
 
   if (message.action === 'CLEAR_RECENT_WORDS') {
@@ -563,7 +771,6 @@ chrome.commands.onCommand.addListener(async (command) => {
       if (activeTab && activeTab.id) {
         chrome.tabs.sendMessage(activeTab.id, { action: 'TRANSLATE_SELECTION' }, () => {
           if (chrome.runtime.lastError) {
-            // Suppress error if active tab is internal or lacks content script
             console.debug('Active tab does not support TRANSLATE_SELECTION:', chrome.runtime.lastError.message);
           }
         });
