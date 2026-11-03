@@ -345,6 +345,10 @@ input#searchInput::placeholder {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
 }
 
+.history-card.card-sentence {
+  border-left: 3px solid var(--accent-sky);
+}
+
 .history-card-main {
   display: flex;
   align-items: center;
@@ -358,6 +362,20 @@ input#searchInput::placeholder {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
+}
+
+.badge-type-sentence {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  padding: 1px 6px;
+  border-radius: 4px;
+  line-height: 1.2;
 }
 
 .word-en {
@@ -486,4 +504,3 @@ input#searchInput::placeholder {
   color: var(--text-dim);
   padding: 12px 0;
 }
-

@@ -1,19 +1,23 @@
 /**
  * Options Page Controller
  * Manages reading, displaying, modifying, testing API credentials,
- * configuring keyboard shortcuts, and resetting extension settings.
+ * configuring keyboard shortcuts, sentence translation preferences,
+ * and resetting extension settings.
  * Fully compatible with both Google Chrome and Microsoft Edge.
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
-  // DOM Elements - Settings Inputs
+  // DOM Elements - Settings Inputs (Section 1: Trigger & Interaction)
   const triggerModeSelect = document.getElementById('triggerMode');
   const hoverDelayInput = document.getElementById('hoverDelay');
   const hoverDelayValue = document.getElementById('hoverDelayValue');
   const hoverDelayRow = document.getElementById('hoverDelayRow');
   const modifierKeySelect = document.getElementById('modifierKey');
+  const sentenceEnabledCheckbox = document.getElementById('sentenceEnabled');
+  const floatingButtonCheckbox = document.getElementById('floatingButton');
   const openShortcutsBtn = document.getElementById('openShortcutsBtn');
 
+  // DOM Elements - Settings Inputs (Section 2: Providers & API)
   const providerOrderList = document.getElementById('providerOrderList');
   const apiKeyInput = document.getElementById('apiKey');
   const toggleApiKeyBtn = document.getElementById('toggleApiKeyVisibility');
@@ -21,17 +25,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   const apiKeyTestResult = document.getElementById('apiKeyTestResult');
   const offlineEnabledCheckbox = document.getElementById('offlineEnabled');
 
+  // DOM Elements - Settings Inputs (Section 3: Audio & Pronunciation)
   const speechRateInput = document.getElementById('speechRate');
   const speechRateValue = document.getElementById('speechRateValue');
   const testSpeechBtn = document.getElementById('testSpeechBtn');
 
+  // DOM Elements - Settings Inputs (Section 4: Appearance & Highlighting)
   const themeSelect = document.getElementById('theme');
   const highlightColorInput = document.getElementById('highlightColor');
   const highlightColorValue = document.getElementById('highlightColorValue');
+  const showOriginalCheckbox = document.getElementById('showOriginal');
 
+  // DOM Elements - Settings Inputs (Section 5: History & Storage)
   const historyLimitInput = document.getElementById('historyLimit');
+  const maxCharsInput = document.getElementById('maxChars');
+  const saveSentencesCheckbox = document.getElementById('saveSentences');
   const resetBtn = document.getElementById('resetBtn');
 
+  // Status feedback elements
   const saveStatus = document.getElementById('saveStatus');
   const saveStatusText = document.getElementById('saveStatusText');
 
@@ -186,56 +197,71 @@ document.addEventListener('DOMContentLoaded', async () => {
   function populateForm(settings) {
     currentSettings = { ...settings };
 
-    // Trigger Mode
+    // Section 1: Trigger & Interaction
     if (triggerModeSelect) {
       triggerModeSelect.value = settings.triggerMode || 'dblclick';
       updateHoverDelayVisibility(settings.triggerMode || 'dblclick');
     }
 
-    // Hover Delay
     if (hoverDelayInput && hoverDelayValue) {
       hoverDelayInput.value = settings.hoverDelay || 600;
       hoverDelayValue.textContent = `${settings.hoverDelay || 600} ms`;
     }
 
-    // Modifier Key
     if (modifierKeySelect) {
       modifierKeySelect.value = settings.modifierKey || 'none';
     }
 
-    // Provider Order
+    if (sentenceEnabledCheckbox) {
+      sentenceEnabledCheckbox.checked = settings.sentenceEnabled !== false;
+    }
+
+    if (floatingButtonCheckbox) {
+      floatingButtonCheckbox.checked = settings.floatingButton !== false;
+    }
+
+    // Section 2: Providers & Priority
     renderProviderOrder(settings.providerOrder || DEFAULT_SETTINGS.providerOrder);
 
-    // API Key
     if (apiKeyInput) {
       apiKeyInput.value = settings.apiKey || '';
     }
 
-    // Offline Enabled
     if (offlineEnabledCheckbox) {
       offlineEnabledCheckbox.checked = settings.offlineEnabled !== false;
     }
 
-    // Speech Rate
+    // Section 3: Audio & Pronunciation
     if (speechRateInput && speechRateValue) {
       speechRateInput.value = settings.speechRate || 0.95;
       speechRateValue.textContent = `${parseFloat(settings.speechRate || 0.95).toFixed(2)}x`;
     }
 
-    // Theme
+    // Section 4: Appearance & Highlighting
     if (themeSelect) {
       themeSelect.value = settings.theme || 'dark';
     }
 
-    // Highlight Color
     if (highlightColorInput && highlightColorValue) {
       highlightColorInput.value = settings.highlightColor || '#fde68a';
       highlightColorValue.textContent = settings.highlightColor || '#fde68a';
     }
 
-    // History Limit
+    if (showOriginalCheckbox) {
+      showOriginalCheckbox.checked = !!settings.showOriginal;
+    }
+
+    // Section 5: History & Storage
     if (historyLimitInput) {
       historyLimitInput.value = settings.historyLimit || 200;
+    }
+
+    if (maxCharsInput) {
+      maxCharsInput.value = settings.maxChars || 3000;
+    }
+
+    if (saveSentencesCheckbox) {
+      saveSentencesCheckbox.checked = !!settings.saveSentences;
     }
   }
 
@@ -344,6 +370,34 @@ document.addEventListener('DOMContentLoaded', async () => {
         const val = modifierKeySelect.value;
         currentSettings.modifierKey = val;
         await saveSettings({ modifierKey: val });
+        showSaveConfirmation();
+      } catch (err) {
+        console.error('Save error:', err);
+      }
+    });
+  }
+
+  // Sentence Translation Toggle
+  if (sentenceEnabledCheckbox) {
+    sentenceEnabledCheckbox.addEventListener('change', async () => {
+      try {
+        const val = sentenceEnabledCheckbox.checked;
+        currentSettings.sentenceEnabled = val;
+        await saveSettings({ sentenceEnabled: val });
+        showSaveConfirmation();
+      } catch (err) {
+        console.error('Save error:', err);
+      }
+    });
+  }
+
+  // Floating Button Toggle
+  if (floatingButtonCheckbox) {
+    floatingButtonCheckbox.addEventListener('change', async () => {
+      try {
+        const val = floatingButtonCheckbox.checked;
+        currentSettings.floatingButton = val;
+        await saveSettings({ floatingButton: val });
         showSaveConfirmation();
       } catch (err) {
         console.error('Save error:', err);
@@ -479,6 +533,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Show Original Expanded Toggle
+  if (showOriginalCheckbox) {
+    showOriginalCheckbox.addEventListener('change', async () => {
+      try {
+        const val = showOriginalCheckbox.checked;
+        currentSettings.showOriginal = val;
+        await saveSettings({ showOriginal: val });
+        showSaveConfirmation();
+      } catch (err) {
+        console.error('Save error:', err);
+      }
+    });
+  }
+
   // History Limit
   if (historyLimitInput) {
     historyLimitInput.addEventListener('change', async () => {
@@ -496,6 +564,37 @@ document.addEventListener('DOMContentLoaded', async () => {
           await chrome.storage.local.set({ recentWords: recentWords.slice(0, val) });
         }
 
+        showSaveConfirmation();
+      } catch (err) {
+        console.error('Save error:', err);
+      }
+    });
+  }
+
+  // Max Characters Per Request
+  if (maxCharsInput) {
+    maxCharsInput.addEventListener('change', async () => {
+      try {
+        let val = parseInt(maxCharsInput.value, 10);
+        if (isNaN(val) || val < 500) val = 500;
+        if (val > 10000) val = 10000;
+        maxCharsInput.value = val;
+        currentSettings.maxChars = val;
+        await saveSettings({ maxChars: val });
+        showSaveConfirmation();
+      } catch (err) {
+        console.error('Save error:', err);
+      }
+    });
+  }
+
+  // Save Sentences Toggle
+  if (saveSentencesCheckbox) {
+    saveSentencesCheckbox.addEventListener('change', async () => {
+      try {
+        const val = saveSentencesCheckbox.checked;
+        currentSettings.saveSentences = val;
+        await saveSettings({ saveSentences: val });
         showSaveConfirmation();
       } catch (err) {
         console.error('Save error:', err);

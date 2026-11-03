@@ -14,7 +14,12 @@ const DEFAULT_SETTINGS = Object.freeze({
   historyLimit: 200,
   highlightColor: '#fde68a',
   theme: 'dark',
-  offlineEnabled: true
+  offlineEnabled: true,
+  sentenceEnabled: true,
+  maxChars: 3000,
+  showOriginal: false,
+  floatingButton: true,
+  saveSentences: false
 });
 
 /**
@@ -76,4 +81,3 @@ if (typeof globalThis !== 'undefined') {
   globalThis.getSettings = getSettings;
   globalThis.saveSettings = saveSettings;
 }
-

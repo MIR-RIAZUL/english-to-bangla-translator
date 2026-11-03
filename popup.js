@@ -1,37 +1,54 @@
 /**
  * Popup Script
- * Handles toggle state persistence, quick manual translation,
- * speech synthesis pronunciation (English and Bangla), options navigation,
- * and recent word history rendering with view-all navigation.
+ * Handles toggle state persistence, quick manual translation (word & sentence mode),
+ * multi-line input with 3000-char counter, Enter to translate, Shift+Enter for newlines,
+ * dual-mode layout auto-switching, speech synthesis pronunciation (English and Bangla),
+ * options navigation, and recent word history rendering with view-all navigation.
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
-  // DOM Elements
+  // DOM Elements - Navigation & Master Toggle
   const enableToggle = document.getElementById('enableToggle');
   const statusPill = document.getElementById('statusPill');
   const statusLabel = document.getElementById('statusLabel');
   const openOptionsBtn = document.getElementById('openOptionsBtn');
 
+  // Quick Translator Elements
   const quickInput = document.getElementById('quickInput');
   const clearInputBtn = document.getElementById('clearInputBtn');
   const charCount = document.getElementById('charCount');
   const speakInputBtn = document.getElementById('speakInputBtn');
   const translateBtn = document.getElementById('translateBtn');
 
+  // Result Area Elements
   const resultBox = document.getElementById('resultBox');
-  const primaryResult = document.getElementById('primaryResult');
-  const speakResultBtn = document.getElementById('speakResultBtn');
-  const dictMeanings = document.getElementById('dictMeanings');
+  const resultTitle = document.getElementById('resultTitle');
   const copyResultBtn = document.getElementById('copyResultBtn');
   const popupOfflineBadge = document.getElementById('popupOfflineBadge');
 
+  // Word Mode Result Elements
+  const wordResultLayout = document.getElementById('wordResultLayout');
+  const primaryResult = document.getElementById('primaryResult');
+  const speakResultBtn = document.getElementById('speakResultBtn');
+  const dictMeanings = document.getElementById('dictMeanings');
+
+  // Sentence Mode Result Elements
+  const sentenceResultLayout = document.getElementById('sentenceResultLayout');
+  const sentenceResultText = document.getElementById('sentenceResultText');
+  const speakSentenceBnBtn = document.getElementById('speakSentenceBnBtn');
+  const copySentenceBtn = document.getElementById('copySentenceBtn');
+  const sentenceNotices = document.getElementById('sentenceNotices');
+
+  // Recent History Elements
   const recentList = document.getElementById('recentList');
   const clearRecentBtn = document.getElementById('clearRecentBtn');
   const viewAllHistoryBtn = document.getElementById('viewAllHistoryBtn');
 
+  // State
   let currentTranslatedText = '';
   let banglaVoiceAvailable = false;
   let currentSpeechRate = 0.95;
+  const MAX_INPUT_CHARS = 3000;
 
   // -------------------------------------------------------------
   // 1. Navigation & Master Toggle
@@ -83,16 +100,24 @@ document.addEventListener('DOMContentLoaded', async () => {
    * Updates the Bangla speech button state based on voice availability and translated text.
    */
   function updateBanglaSpeakButtonState() {
-    if (!speakResultBtn) return;
+    const isAvailable = banglaVoiceAvailable && !!currentTranslatedText;
+    const titleText = banglaVoiceAvailable
+      ? 'বাংলা উচ্চারণ শুনুন'
+      : 'No Bangla voice installed on this device.';
+    const ariaText = banglaVoiceAvailable
+      ? 'Pronounce Bangla translation'
+      : 'No Bangla voice installed on this device.';
 
-    if (!banglaVoiceAvailable) {
-      speakResultBtn.disabled = true;
-      speakResultBtn.title = 'No Bangla voice installed on this device.';
-      speakResultBtn.setAttribute('aria-label', 'No Bangla voice installed on this device.');
-    } else {
-      speakResultBtn.disabled = !currentTranslatedText;
-      speakResultBtn.title = 'বাংলা উচ্চারণ শুনুন';
-      speakResultBtn.setAttribute('aria-label', 'Pronounce Bangla translation');
+    if (speakResultBtn) {
+      speakResultBtn.disabled = !isAvailable;
+      speakResultBtn.title = titleText;
+      speakResultBtn.setAttribute('aria-label', ariaText);
+    }
+
+    if (speakSentenceBnBtn) {
+      speakSentenceBnBtn.disabled = !isAvailable;
+      speakSentenceBnBtn.title = titleText;
+      speakSentenceBnBtn.setAttribute('aria-label', ariaText);
     }
   }
 
@@ -154,7 +179,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // -------------------------------------------------------------
-  // 2. Quick Translate Logic
+  // 2. Quick Translate Logic (Word & Sentence Modes)
   // -------------------------------------------------------------
 
   /**
@@ -163,7 +188,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function updateInputControls() {
     const text = quickInput.value;
     const trimmed = text.trim();
-    charCount.textContent = `${text.length} chars`;
+    charCount.textContent = `${text.length} / ${MAX_INPUT_CHARS}`;
 
     clearInputBtn.style.display = text.length > 0 ? 'inline-flex' : 'none';
     speakInputBtn.disabled = trimmed.length === 0;
@@ -171,7 +196,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   quickInput.addEventListener('input', updateInputControls);
 
-  // Trigger translation on Enter (without Shift)
+  // Trigger translation on Enter (Shift+Enter inserts new line)
   quickInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -196,7 +221,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   /**
-   * Sends text to background service worker for translation and renders the result.
+   * Sends text to background service worker for translation and renders the result
+   * dynamically switching between Word and Sentence layouts.
    */
   async function executeQuickTranslate() {
     const text = quickInput.value.trim();
@@ -208,8 +234,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Show loading state
     resultBox.style.display = 'block';
     if (popupOfflineBadge) popupOfflineBadge.style.display = 'none';
+    if (resultTitle) resultTitle.textContent = 'Bangla Translation';
+
+    // Show loading placeholder in word layout while waiting
+    wordResultLayout.style.display = 'block';
+    sentenceResultLayout.style.display = 'none';
     primaryResult.innerHTML = '<span class="loading-text">অনুবাদ করা হচ্ছে...</span>';
     dictMeanings.innerHTML = '';
+    sentenceResultText.textContent = '';
+    sentenceNotices.innerHTML = '';
     currentTranslatedText = '';
     updateBanglaSpeakButtonState();
     translateBtn.disabled = true;
@@ -226,34 +259,63 @@ document.addEventListener('DOMContentLoaded', async () => {
 
           if (response && response.success && response.data) {
             const data = response.data;
-            currentTranslatedText = data.primary || '';
-            primaryResult.textContent = currentTranslatedText;
-            updateBanglaSpeakButtonState();
+            currentTranslatedText = data.primary || data.translation || '';
+            const isSentence = data.mode === 'sentence';
 
             // Show or hide offline badge
             if (popupOfflineBadge) {
               popupOfflineBadge.style.display = data.source === 'offline' ? 'inline-flex' : 'none';
             }
 
-            // Render dictionary meanings if available
-            if (Array.isArray(data.dictionary) && data.dictionary.length > 0) {
-              const html = data.dictionary
-                .slice(0, 3)
-                .map((item) => {
-                  return `
-                    <div class="dict-item-row">
-                      <span class="pos-badge">${escapeHtml(item.pos)}</span>
-                      <span class="pos-terms-text">${escapeHtml(item.terms.join(', '))}</span>
-                    </div>
-                  `;
-                })
-                .join('');
-              dictMeanings.innerHTML = html;
+            if (isSentence) {
+              // ---------------- Sentence Mode Rendering ----------------
+              if (resultTitle) resultTitle.textContent = 'Bangla Translation';
+              wordResultLayout.style.display = 'none';
+              sentenceResultLayout.style.display = 'flex';
+
+              sentenceResultText.textContent = currentTranslatedText;
+
+              // Sentence notices
+              let noticesHtml = '';
+              if (data.truncated) {
+                noticesHtml += `<div class="popup-notice notice-warning">Showing first ${MAX_INPUT_CHARS} characters only.</div>`;
+              }
+              if (data.approximate) {
+                noticesHtml += `<div class="popup-notice notice-info">Offline approximate (word-by-word) translation.</div>`;
+              }
+              sentenceNotices.innerHTML = noticesHtml;
             } else {
-              dictMeanings.innerHTML = '';
+              // ---------------- Word Mode Rendering ----------------
+              if (resultTitle) resultTitle.textContent = 'Bangla Meaning';
+              wordResultLayout.style.display = 'block';
+              sentenceResultLayout.style.display = 'none';
+
+              primaryResult.textContent = currentTranslatedText;
+
+              // Render dictionary meanings if available
+              if (Array.isArray(data.dictionary) && data.dictionary.length > 0) {
+                const html = data.dictionary
+                  .slice(0, 3)
+                  .map((item) => {
+                    return `
+                      <div class="dict-item-row">
+                        <span class="pos-badge">${escapeHtml(item.pos)}</span>
+                        <span class="pos-terms-text">${escapeHtml(item.terms.join(', '))}</span>
+                      </div>
+                    `;
+                  })
+                  .join('');
+                dictMeanings.innerHTML = html;
+              } else {
+                dictMeanings.innerHTML = '';
+              }
             }
+
+            updateBanglaSpeakButtonState();
           } else {
             const errorMsg = response?.error || 'অনুবাদ সম্পন্ন করা যায়নি।';
+            wordResultLayout.style.display = 'block';
+            sentenceResultLayout.style.display = 'none';
             primaryResult.innerHTML = `<span style="color: #f87171; font-size: 13px;">${escapeHtml(errorMsg)}</span>`;
             dictMeanings.innerHTML = '';
             currentTranslatedText = '';
@@ -264,6 +326,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       );
     } catch (err) {
       translateBtn.disabled = false;
+      wordResultLayout.style.display = 'block';
+      sentenceResultLayout.style.display = 'none';
       primaryResult.innerHTML = `<span style="color: #f87171; font-size: 13px;">অনুবাদ ত্রুটি: ${escapeHtml(err.message)}</span>`;
       currentTranslatedText = '';
       updateBanglaSpeakButtonState();
@@ -271,7 +335,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // Copy result button
+  // Copy result button in header
   copyResultBtn.addEventListener('click', async () => {
     if (!currentTranslatedText) return;
     try {
@@ -292,6 +356,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  // Copy button in sentence action bar
+  if (copySentenceBtn) {
+    copySentenceBtn.addEventListener('click', async () => {
+      if (!currentTranslatedText) return;
+      try {
+        await navigator.clipboard.writeText(currentTranslatedText);
+        const originalHTML = copySentenceBtn.innerHTML;
+        copySentenceBtn.innerHTML = `
+          <svg viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2.5" class="icon-svg">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          <span>Copied!</span>
+        `;
+        setTimeout(() => {
+          copySentenceBtn.innerHTML = originalHTML;
+        }, 1500);
+      } catch (err) {
+        console.warn('Clipboard write error:', err);
+      }
+    });
+  }
+
   // Speech pronunciation for English input
   speakInputBtn.addEventListener('click', () => {
     const text = quickInput.value.trim();
@@ -306,7 +392,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Speech pronunciation for Bangla translation result
+  // Speech pronunciation for Bangla translation result (Word mode)
   if (speakResultBtn) {
     speakResultBtn.addEventListener('click', () => {
       if (currentTranslatedText && banglaVoiceAvailable) {
@@ -316,6 +402,21 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         } catch (err) {
           console.warn('Bangla speech error:', err);
+        }
+      }
+    });
+  }
+
+  // Speech pronunciation for Bangla translation result (Sentence mode)
+  if (speakSentenceBnBtn) {
+    speakSentenceBnBtn.addEventListener('click', () => {
+      if (currentTranslatedText && banglaVoiceAvailable) {
+        try {
+          if (typeof speak === 'function') {
+            speak(currentTranslatedText, 'bn-BD', currentSpeechRate, speakSentenceBnBtn);
+          }
+        } catch (err) {
+          console.warn('Bangla sentence speech error:', err);
         }
       }
     });
@@ -335,7 +436,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       recentList.innerHTML = `
         <div class="empty-state">
           <span>এখনও কোনো সাম্প্রতিক শব্দ নেই</span>
-          <small>যেকোনো ওয়েবপেজের শব্দে ডাবল-ক্লিক করুন</small>
+          <small>যেকোনো ওয়েবপেজের শব্দ বা বাক্যে ডাবল-ক্লিক করুন</small>
         </div>
       `;
       clearRecentBtn.style.display = 'none';
@@ -378,7 +479,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const itemElements = recentList.querySelectorAll('.recent-item');
     itemElements.forEach((el, idx) => {
       el.addEventListener('click', (e) => {
-        // If clicking one of the action buttons inside, don't trigger item selection
         if (e.target.closest('.action-icon-btn')) return;
 
         const item = recentFive[idx];

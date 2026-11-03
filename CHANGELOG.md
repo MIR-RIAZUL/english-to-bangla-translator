@@ -7,76 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [2.0.0] - 2026-11-03
+## [2.0.0] - 2026-11-04
 
 ### Added
+- **Sentence and Paragraph Translation**:
+  - Full sentence and paragraph translation engine supporting up to 3,000 characters per request (configurable via `settings.maxChars`).
+  - Automatic sentence boundary splitting on `.`, `!`, `?`, and `\n` to prevent truncation and respect upstream API request limits.
+  - Smart automatic mode detection (`detectMode`): text ≤ 3 words treated as dictionary lookup, > 3 words treated as prose sentence.
+  - Multi-trigger support: triple-click on paragraphs, mouse selection of 4+ words, `Alt+T` shortcut, and right-click context menu.
+  - Floating "অ" action button (Shadow DOM, 28×28px) appearing near the end of 4+ word selections.
+  - Context menu item: **"Translate to Bangla"** for selection context via new `contextMenus` permission.
+  - Adaptive sentence tooltip layout: up to 420px wide, max 60vh tall, scrollable content area with scroll containment.
+  - Collapsible "Original" section in sentence tooltips (collapsed to 3 lines by default or expanded via `showOriginal` setting).
+  - Queued text-to-speech (`speakInQueue`): splits long passages into discrete sentence utterances, preventing Chromium's 15-second speech synthesis cutoff bug.
+  - Offline sentence fallback: word-by-word local translation with unknown tokens preserved, tagged with `approximate: true`.
+  - Sentence history logging: optional storage of sentence translations when `saveSentences` is enabled, truncated to 120 characters in list view with `type: "sentence"` tag.
+- **Multi-Line Quick Translator Popup**:
+  - 5-row multi-line textarea with 3,000-character capacity and live counter (`X / 3000`).
+  - **Enter** key triggers translation; **Shift+Enter** inserts new lines.
+  - Dynamic result layout auto-switching between concise word view (large font + POS cards) and paragraph sentence view (line breaks + Listen & Copy controls).
+- **New Settings Options (`settings.js`, `options.html`, `options.js`)**:
+  - `sentenceEnabled`: master toggle for sentence translation.
+  - `floatingButton`: controls display of the floating "অ" selection button.
+  - `showOriginal`: option to automatically expand original English text in sentence tooltips.
+  - `maxChars`: configurable limit between 500 and 10,000 characters (default: 3000).
+  - `saveSentences`: optional inclusion of sentence lookups in local vocabulary history.
+- **Cross-Browser Native Support (Chrome & Edge)**:
+  - 100% Manifest V3 compliant across both Google Chrome and Microsoft Edge.
+  - Smart browser detection navigating to `edge://extensions/shortcuts` or `chrome://extensions/shortcuts`.
+  - Dedicated support for Edge Online Natural voices (`Microsoft Bashkar Online (Natural)` / `Microsoft Nabanita Online (Natural)`).
 - **Unified Settings Foundation (`settings.js`, `options.html`, `options.css`, `options.js`)**:
-  - Single `settings` configuration object persisted in `chrome.storage.local` with automatic migration for upgrading users.
-  - Interactive Options page with live auto-saving, visual save indicator, and one-click "Reset to Defaults".
+  - Single `settings` configuration object persisted in `chrome.storage.local`.
+  - Interactive Options page with live auto-saving, visual save indicator, and "Reset to Defaults".
 - **Local Font Bundling**:
-  - Fully offline, bundled `Inter` (400, 600) and `Hind Siliguri` (400, 600) WOFF2 font files in `/fonts`.
+  - Offline bundled `Inter` (400, 600) and `Hind Siliguri` (400, 600) WOFF2 font files in `/fonts`.
   - Injected `@font-face` rules using `chrome.runtime.getURL()` with deduplication guard in `content.js`.
-  - Comprehensive system font fallback stacks (`Segoe UI`, `Arial`, `Noto Sans Bengali`, `sans-serif`) across all extension views.
-  - Complete elimination of Google Fonts CDN `<link>` and `@import` requests for zero-tracking privacy and offline readiness.
+  - Complete elimination of external Google Fonts CDN network calls.
 - **Offline Starter Dictionary & Persistent Caching**:
-  - Bundled starter dictionary (`data/dictionary.json`) with ~300+ high-frequency English vocabulary terms mapped to parts of speech and Bengali definitions (CC0 1.0 Universal Public Domain Dedication).
-  - Morphological lemmatizer (`lemmatize.js`) supporting suffixes (`-ing`, `-ed`, `-s`, `-es`, `-ies` → `y`, `-ied` → `y`) and doubled consonants (e.g. `running` → `run`).
-  - Two-tier cache hierarchy: 300-entry in-memory LRU cache plus 1,000-entry persistent cache (`tcache`) in `chrome.storage.local` with automatic oldest-entry eviction.
-  - Lookup source metadata tagging (`cache` | `online` | `offline`) with an amber **offline** badge rendered on tooltips and popup results.
+  - Bundled starter dictionary (`data/dictionary.json`) with ~300+ English vocabulary terms (CC0 1.0 Universal).
+  - Morphological lemmatizer (`lemmatize.js`) supporting suffixes and doubled consonants.
+  - Two-tier cache hierarchy: 300-entry in-memory LRU cache + 1,000-entry persistent cache (`tcache`).
+  - Amber **offline** badge rendered on tooltips and popup results when served offline.
 - **Official Google Cloud Translation API v2 Basic**:
-  - Secure integration with official Google Cloud Translation REST endpoint (`https://translation.googleapis.com/language/translate/v2`).
-  - API credentials stored strictly in `chrome.storage.local` (never logged, never synced).
+  - Integration with official Google Cloud Translation REST endpoint (`translation.googleapis.com`).
   - In-options **Test Key** verification button with live status reporting.
-  - Exponential backoff algorithm (up to 2 retries) for HTTP 429 (rate limits) and 5xx (server errors).
-  - Bilingual friendly error handling for quota limits, invalid keys, and network disconnects.
-- **Configurable Provider Fallback Hierarchy**:
-  - User-customizable provider execution sequence (`official` → `gtx` → `mymemory` → `offline`).
-  - Automatic seamless failover to subsequent providers upon network drops or upstream API failures.
+  - Exponential backoff with up to 2 retries for HTTP 429 and 5xx errors.
 - **Debounced Mouse Hover Word Detection**:
   - Configurable interaction modes: `dblclick`, `hover`, or `both`.
-  - Sub-pixel cursor tracking via `document.caretRangeFromPoint` (with fallback to `document.caretPositionFromPoint`) and automatic word expansion.
-  - User-configurable hover debounce delay (200ms – 2000ms).
-  - Modifier key gating (`Alt`, `Ctrl`, `Shift`, or `None`).
-  - Safe-zone heuristics: ignores `<input>`, `<textarea>`, password fields, and `contentEditable` elements.
-- **Keyboard Shortcuts**:
-  - `Alt+T` (`translate-selection`): Translates currently selected text across any active webpage.
-  - `Alt+Shift+T` (`toggle-extension`): Globally toggles extension translation functionality on or off.
-  - Direct shortcut launcher button in Options navigating to `chrome://extensions/shortcuts`.
-- **Dual-Language Text-to-Speech (TTS)**:
-  - English pronunciation playback via native speech synthesis.
-  - Primary Bangla translation pronunciation playback via dedicated `tts.js` module.
-  - Intelligent voice resolver prioritizing `bn-BD` (Bangladesh) followed by `bn-IN` (India).
-  - Graceful fallback with informative disabled state tooltip when no Bangla voice is installed on the host OS.
-  - User-configurable playback rate (`speechRate`) applied synchronously to both languages.
-- **Full History & Search Dashboard (`history.html`, `history.css`, `history.js`)**:
-  - Dedicated full-page history management console.
-  - Live search with instant substring matching across both English and Bengali fields.
-  - Language filtering (All, English only, Bangla only).
-  - Dynamic sorting by "Most Recent", "Most Looked Up" (frequency count), or "Alphabetical (A–Z)".
-  - One-click copy and pronunciation buttons per card.
-  - Individual entry deletion and "Clear All" with confirmation safeguard.
-  - Data export to CSV (featuring UTF-8 BOM `\uFEFF` for clean rendering in Microsoft Excel and Google Sheets) and JSON backup format.
-  - Modernized history schema: `{ word, translation, timestamp, count }` with automatic count incrementing and timestamp refreshing on repeat lookups.
+  - Sub-pixel cursor tracking via `document.caretRangeFromPoint` / `document.caretPositionFromPoint`.
+  - Configurable hover debounce delay (200ms – 2000ms) and modifier key gating (`Alt`, `Ctrl`, `Shift`).
 - **CSS Custom Highlight API Integration**:
-  - Non-destructive word highlighting using the modern `CSS.highlights` API and `::highlight(eng-bn-word-highlight)` pseudo-element.
+  - Non-destructive word highlighting using native `CSS.highlights` and `::highlight(eng-bn-word-highlight)`.
   - Custom highlight tint configurable via `settings.highlightColor`.
-  - Automatic highlight cleanup upon tooltip dismissal.
-  - Safe degradation: if unsupported, highlighting is skipped without any DOM modification.
-- **Accessibility & Reduced Motion**:
-  - Accessible tooltip container with `role="dialog"` and contextual `aria-label`.
-  - Accessible `aria-label` attributes across all interactive buttons (English speech, Bangla speech, copy, close).
-  - High-visibility `:focus-visible` outline rings for keyboard navigators.
-  - `@media (prefers-reduced-motion: reduce)` rule disabling all CSS transitions and spinner animations.
-- **Multi-Theme Engine**:
-  - Seamless support for `dark` (default), `light`, and system `auto` (`prefers-color-scheme`) themes.
+- **Full History & Search Dashboard (`history.html`, `history.css`, `history.js`)**:
+  - Dedicated full-page history management console with live search, filtering, and sorting.
+  - Data export to CSV (featuring UTF-8 BOM `\uFEFF`) and JSON backup format.
+  - History schema supporting both words and sentences with frequency counts and timestamps.
+- **Accessibility & Multi-Theme Engine**:
+  - `role="dialog"` semantic encapsulation, comprehensive `aria-label` tags, `:focus-visible` focus rings.
+  - `@media (prefers-reduced-motion: reduce)` animation silencing.
+  - Support for `dark` (default), `light`, and system `auto` (`prefers-color-scheme`) themes.
 
 ### Changed
-- Refactored history storage from flat arrays to rich `{ word, translation, timestamp, count }` objects.
-- Migrated font asset loading from external Google Fonts CDN to local packaged web resources.
-- Upgraded extension manifest version to `2.0.0`.
+- Refactored popup input from single-line field to 5-row multi-line textarea with 3000-character limit.
+- Updated extension permissions to include `contextMenus`.
+- Refactored history storage to support `type: "sentence"` records with 120-character preview truncation.
 
 ### Security & Privacy
 - Zero telemetry, zero analytics, zero external user data tracking.
 - All user preferences, history, and cache stored strictly on the local machine via `chrome.storage.local`.
 - Zero npm package dependencies; 100% vanilla JavaScript.
-

@@ -1,7 +1,8 @@
 /**
  * History Page Controller
  * Manages rendering, live searching, filtering, sorting, single deletion,
- * bulk clearing, audio pronunciation, and CSV / JSON export of translated vocabulary.
+ * bulk clearing, audio pronunciation, sentence lookup representation,
+ * and CSV / JSON export of translated vocabulary.
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -62,19 +63,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   /**
-   * Normalizes a history entry to guarantee { word, translation, timestamp, count }.
+   * Normalizes a history entry to guarantee { word, translation, timestamp, count, type }.
    * @param {Object} item
-   * @returns {{ word: string, translation: string, timestamp: number, count: number }}
+   * @returns {{ word: string, translation: string, timestamp: number, count: number, type: string }}
    */
   function normalizeItem(item) {
     if (!item || typeof item !== 'object') {
-      return { word: '', translation: '', timestamp: Date.now(), count: 1 };
+      return { word: '', translation: '', timestamp: Date.now(), count: 1, type: 'word' };
     }
     return {
       word: typeof item.word === 'string' ? item.word : '',
       translation: typeof item.translation === 'string' ? item.translation : '',
       timestamp: typeof item.timestamp === 'number' && !isNaN(item.timestamp) ? item.timestamp : Date.now(),
-      count: typeof item.count === 'number' && item.count > 0 ? item.count : 1
+      count: typeof item.count === 'number' && item.count > 0 ? item.count : 1,
+      type: item.type === 'sentence' ? 'sentence' : 'word'
     };
   }
 
@@ -129,14 +131,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         statsSummary.textContent = 'No translations in history yet';
       } else if (visibleCount === totalCount) {
         const totalLookups = rawHistory.reduce((acc, cur) => acc + (cur.count || 1), 0);
-        statsSummary.textContent = `Showing all ${totalCount} words (${totalLookups} total lookups)`;
+        statsSummary.textContent = `Showing all ${totalCount} items (${totalLookups} total lookups)`;
       } else {
-        statsSummary.textContent = `Showing ${visibleCount} of ${totalCount} words`;
+        statsSummary.textContent = `Showing ${visibleCount} of ${totalCount} items`;
       }
     }
 
     if (retentionLimitNotice) {
-      retentionLimitNotice.textContent = `Storage limit: ${historyLimit} words`;
+      retentionLimitNotice.textContent = `Storage limit: ${historyLimit} items`;
     }
 
     const hasData = totalCount > 0;
@@ -160,8 +162,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-icon">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
           </svg>
-          <div class="empty-title">Your vocabulary history is empty</div>
-          <div class="empty-subtitle">Double-click or hover over words on web pages to automatically build your learning history.</div>
+          <div class="empty-title">Your translation history is empty</div>
+          <div class="empty-subtitle">Double-click or select words and sentences on web pages to automatically build your learning history.</div>
         </div>
       `;
       return;
@@ -173,7 +175,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-icon">
             <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
-          <div class="empty-title">No matching words found</div>
+          <div class="empty-title">No matching items found</div>
           <div class="empty-subtitle">Try adjusting your search query or changing the filter options above.</div>
         </div>
       `;
@@ -189,17 +191,24 @@ document.addEventListener('DOMContentLoaded', async () => {
       : 'Pronounce Bangla translation';
 
     historyListContainer.innerHTML = visibleItems
-      .map((item, index) => {
+      .map((item) => {
+        const isSentence = item.type === 'sentence';
         const lookupCount = item.count || 1;
         const lookupLabel = lookupCount > 1 ? `${lookupCount} lookups` : '1 lookup';
         const formattedDate = formatTimestamp(item.timestamp);
 
+        // Truncate displayed word to 120 characters in list view
+        const displayedWord = item.word.length > 120
+          ? item.word.slice(0, 120) + '…'
+          : item.word;
+
         return `
-          <article class="history-card" data-word="${escapeHtml(item.word)}">
+          <article class="history-card ${isSentence ? 'card-sentence' : ''}" data-word="${escapeHtml(item.word)}">
             <div class="history-card-main">
               <div class="word-term-group">
-                <span class="word-en">${escapeHtml(item.word)}</span>
-                <button type="button" class="action-btn btn-speak-en" data-text="${escapeHtml(item.word)}" title="উচ্চারণ শুনুন (English)" aria-label="Pronounce English word">
+                ${isSentence ? '<span class="badge-type-sentence">Sentence</span>' : ''}
+                <span class="word-en" title="${escapeHtml(item.word)}">${escapeHtml(displayedWord)}</span>
+                <button type="button" class="action-btn btn-speak-en" data-text="${escapeHtml(item.word)}" title="উচ্চারণ শুনুন (English)" aria-label="Pronounce English text">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-icon">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
                   </svg>
@@ -220,12 +229,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             </div>
 
             <div class="card-action-buttons">
-              <button type="button" class="action-btn btn-copy" data-copy="${escapeHtml(item.translation)}" title="Copy Bangla translation">
+              <button type="button" class="action-btn btn-copy" data-copy="${escapeHtml(item.translation)}" title="Copy Bangla translation" aria-label="Copy Bangla translation">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-icon">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
               </button>
-              <button type="button" class="action-btn action-btn-danger btn-delete" data-word="${escapeHtml(item.word)}" title="Delete item from history">
+              <button type="button" class="action-btn action-btn-danger btn-delete" data-word="${escapeHtml(item.word)}" title="Delete item from history" aria-label="Delete item from history">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-icon">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                 </svg>
@@ -336,12 +345,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (rawHistory.length === 0) return;
 
     try {
-      const header = ['Word', 'Translation', 'Lookup Count', 'Timestamp', 'Date'];
+      const header = ['Word or Sentence', 'Translation', 'Type', 'Lookup Count', 'Timestamp', 'Date'];
       const rows = rawHistory.map((item) => {
         const dateStr = item.timestamp ? new Date(item.timestamp).toISOString() : '';
         const wordClean = String(item.word || '').replace(/"/g, '""');
         const transClean = String(item.translation || '').replace(/"/g, '""');
-        return `"${wordClean}","${transClean}",${item.count || 1},${item.timestamp || ''},"${dateStr}"`;
+        const typeClean = item.type === 'sentence' ? 'sentence' : 'word';
+        return `"${wordClean}","${transClean}","${typeClean}",${item.count || 1},${item.timestamp || ''},"${dateStr}"`;
       });
 
       // Prepend UTF-8 BOM so Excel and spreadsheet tools display Bengali characters properly
@@ -370,6 +380,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const exportData = rawHistory.map((item) => ({
         word: item.word,
         translation: item.translation,
+        type: item.type === 'sentence' ? 'sentence' : 'word',
         count: item.count || 1,
         timestamp: item.timestamp,
         date: item.timestamp ? new Date(item.timestamp).toISOString() : ''
@@ -495,4 +506,3 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Run initial setup
   await initialize();
 });
-

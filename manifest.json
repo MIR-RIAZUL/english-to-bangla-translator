@@ -5,7 +5,8 @@
   "description": "Double-click any English word on any webpage for instantaneous Bangla translation with pronunciation, dictionary meanings, and quick translation.",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "contextMenus"
   ],
   "host_permissions": [
     "https://translate.googleapis.com/*",

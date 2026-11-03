@@ -281,6 +281,7 @@ input:checked + .slider:before {
 .char-counter {
   font-size: 10.5px;
   color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .input-container {
@@ -290,14 +291,16 @@ input:checked + .slider:before {
 
 textarea#quickInput {
   width: 100%;
+  min-height: 92px;
   background: rgba(15, 23, 42, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   color: #ffffff;
   font-family: var(--font-sans);
   font-size: 12.5px;
+  line-height: 1.45;
   padding: 8px 28px 8px 10px;
-  resize: none;
+  resize: vertical;
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
   user-select: text;
@@ -431,7 +434,7 @@ textarea#quickInput::placeholder {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 .result-title-group {
@@ -463,6 +466,7 @@ textarea#quickInput::placeholder {
   line-height: 1.2;
 }
 
+/* Word Mode Result */
 .primary-result-row {
   display: flex;
   align-items: center;
@@ -478,10 +482,6 @@ textarea#quickInput::placeholder {
   line-height: 1.4;
   word-break: break-word;
   user-select: text;
-}
-
-.primary-result-row .primary-meaning {
-  margin-bottom: 0;
 }
 
 .btn-speak-bn {
@@ -526,6 +526,73 @@ textarea#quickInput::placeholder {
   font-size: 12px;
   color: #cbd5e1;
   user-select: text;
+}
+
+/* Sentence Mode Result */
+.sentence-result-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.sentence-paragraph-text {
+  font-family: var(--font-bengali);
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--accent-sky);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+  user-select: text;
+  padding-right: 4px;
+}
+
+.sentence-paragraph-text::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sentence-paragraph-text::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.sentence-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.sentence-actions-bar .btn-sm {
+  padding: 5px 10px;
+  font-size: 11.5px;
+}
+
+.sentence-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.popup-notice {
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1.3;
+}
+
+.notice-warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+}
+
+.notice-info {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.28);
 }
 
 /* Recent Words List */

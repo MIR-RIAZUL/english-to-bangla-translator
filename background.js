@@ -3,7 +3,8 @@
  * Handles translation API calls (bypassing webpage CORS/CSP restrictions),
  * in-memory and persistent caching, lemmatization, offline dictionary fallbacks,
  * official Google Cloud Translation API v2 integration, keyboard shortcuts (commands),
- * sentence/paragraph translation with chunking, and persistence of recent word lookups.
+ * context menu selection translations, sentence/paragraph translation with chunking,
+ * and persistence of recent word & sentence lookups.
  */
 
 try {
@@ -489,68 +490,81 @@ async function translateMyMemory(text, mode = 'word') {
 }
 
 /**
- * Normalizes and migrates a history record to { word, translation, timestamp, count }.
+ * Normalizes and migrates a history record to { word, translation, timestamp, count, type }.
  * @param {Object} item - Raw history entry.
- * @returns {{ word: string, translation: string, timestamp: number, count: number }}
+ * @returns {{ word: string, translation: string, timestamp: number, count: number, type: string }}
  */
 function normalizeHistoryItem(item) {
   if (!item || typeof item !== 'object') {
-    return { word: '', translation: '', timestamp: Date.now(), count: 1 };
+    return { word: '', translation: '', timestamp: Date.now(), count: 1, type: 'word' };
   }
   return {
     word: typeof item.word === 'string' ? item.word : '',
     translation: typeof item.translation === 'string' ? item.translation : '',
     timestamp: typeof item.timestamp === 'number' && !isNaN(item.timestamp) ? item.timestamp : Date.now(),
-    count: typeof item.count === 'number' && item.count > 0 ? item.count : 1
+    count: typeof item.count === 'number' && item.count > 0 ? item.count : 1,
+    type: item.type === 'sentence' ? 'sentence' : 'word'
   };
 }
 
 /**
- * Persist a translated WORD to recent words history in chrome.storage.local.
- * Sentences are never saved here.
- * Maintains { word, translation, timestamp, count } structure.
- * Increments count and updates timestamp if existing; trims to settings.historyLimit.
+ * Persist a translated word or sentence to recent words history in chrome.storage.local.
+ * Sentences are only saved when settings.saveSentences is true, marked with type "sentence".
+ * Truncated to 120 characters in storage.
  * @param {string} word
  * @param {string} translation
+ * @param {"word"|"sentence"} [mode="word"]
  */
-async function saveRecentWord(word, translation) {
+async function saveRecentWord(word, translation, mode = 'word') {
   try {
     const trimmedWord = word.trim();
     const trimmedTranslation = translation.trim();
     if (!trimmedWord || !trimmedTranslation) return;
 
-    // Only record single words or short phrases up to 3 words
-    const wordCount = trimmedWord.split(/\s+/).length;
-    if (wordCount > 3 || trimmedWord.length > 40) return;
-
     const data = await chrome.storage.local.get(['recentWords', 'settings']);
-    const rawList = Array.isArray(data.recentWords) ? data.recentWords : [];
     const settings = (data.settings && typeof data.settings === 'object') ? data.settings : {};
+
+    if (mode === 'sentence') {
+      if (!settings.saveSentences) return; // Do not save sentences unless opted in
+    } else {
+      // Word mode validation
+      const wordCount = trimmedWord.split(/\s+/).length;
+      if (wordCount > 3 || trimmedWord.length > 40) return;
+    }
+
+    const rawList = Array.isArray(data.recentWords) ? data.recentWords : [];
     const historyLimit = typeof settings.historyLimit === 'number' && settings.historyLimit >= 10
       ? settings.historyLimit
       : 200;
 
     const history = rawList.map(normalizeHistoryItem);
 
-    const wordLower = trimmedWord.toLowerCase();
+    // For sentences, store truncated to 120 chars
+    const storedWord = mode === 'sentence' && trimmedWord.length > 120
+      ? trimmedWord.slice(0, 120) + '…'
+      : trimmedWord;
+
+    const wordLower = storedWord.toLowerCase();
     const existingIndex = history.findIndex((item) => item.word.toLowerCase() === wordLower);
 
     let updatedEntry;
     if (existingIndex !== -1) {
       const existing = history[existingIndex];
       updatedEntry = {
-        word: trimmedWord,
+        word: storedWord,
         translation: trimmedTranslation,
         timestamp: Date.now(),
-        count: (existing.count || 1) + 1
+        count: (existing.count || 1) + 1,
+        type: mode
       };
       history.splice(existingIndex, 1);
     } else {
       updatedEntry = {
-        word: trimmedWord,
+        word: storedWord,
         translation: trimmedTranslation,
         timestamp: Date.now(),
-        count: 1
+        count: 1,
+        type: mode
       };
     }
 
@@ -558,7 +572,7 @@ async function saveRecentWord(word, translation) {
     const trimmedHistory = history.slice(0, historyLimit);
     await chrome.storage.local.set({ recentWords: trimmedHistory });
   } catch (error) {
-    console.error('Failed to save recent word:', error);
+    console.error('Failed to save recent word/sentence:', error);
   }
 }
 
@@ -583,7 +597,7 @@ async function saveRecentWord(word, translation) {
  * }
  *
  * @param {string} text
- * @param {boolean} isDoubleClick - When true, saves word-mode results to recentWords.
+ * @param {boolean} isDoubleClick - When true, saves results to recentWords (subject to settings).
  * @returns {Promise<object>}
  */
 async function handleTranslation(text, isDoubleClick = false) {
@@ -627,8 +641,8 @@ async function handleTranslation(text, isDoubleClick = false) {
   // 1. Check in-memory cache
   const memCached = getCachedTranslation(cacheKey);
   if (memCached) {
-    if (mode === 'word' && isDoubleClick) {
-      await saveRecentWord(inputText, memCached.primary);
+    if (isDoubleClick) {
+      await saveRecentWord(inputText, memCached.primary, mode);
     }
     return buildResponse(memCached, true);
   }
@@ -637,8 +651,8 @@ async function handleTranslation(text, isDoubleClick = false) {
   const persistentCached = await getPersistentCachedTranslation(cacheKey);
   if (persistentCached) {
     setCachedTranslation(cacheKey, persistentCached);
-    if (mode === 'word' && isDoubleClick) {
-      await saveRecentWord(inputText, persistentCached.primary);
+    if (isDoubleClick) {
+      await saveRecentWord(inputText, persistentCached.primary, mode);
     }
     return buildResponse(persistentCached, true);
   }
@@ -651,8 +665,8 @@ async function handleTranslation(text, isDoubleClick = false) {
   if (!isOnline) {
     const offlineResult = await translateOffline(inputText, mode);
     setCachedTranslation(cacheKey, offlineResult);
-    if (mode === 'word' && isDoubleClick) {
-      await saveRecentWord(inputText, offlineResult.primary);
+    if (isDoubleClick) {
+      await saveRecentWord(inputText, offlineResult.primary, mode);
     }
     return buildResponse(offlineResult);
   }
@@ -689,9 +703,9 @@ async function handleTranslation(text, isDoubleClick = false) {
           await setPersistentCachedTranslation(cacheKey, result);
         }
 
-        // Only save word-mode lookups to history
-        if (mode === 'word' && isDoubleClick) {
-          await saveRecentWord(inputText, result.primary);
+        // Save to history conditionally
+        if (isDoubleClick) {
+          await saveRecentWord(inputText, result.primary, mode);
         }
 
         return buildResponse(result);
@@ -707,6 +721,9 @@ async function handleTranslation(text, isDoubleClick = false) {
     try {
       const fallbackResult = await translateOffline(inputText, 'sentence');
       setCachedTranslation(cacheKey, fallbackResult);
+      if (isDoubleClick) {
+        await saveRecentWord(inputText, fallbackResult.primary, mode);
+      }
       return buildResponse(fallbackResult);
     } catch (offlineErr) {
       console.warn('Offline sentence fallback also failed:', offlineErr.message);
@@ -785,9 +802,45 @@ chrome.commands.onCommand.addListener(async (command) => {
   }
 });
 
-// Extension installation initialization and migration
+/**
+ * Handles context menu clicks ("Translate to Bangla").
+ */
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === 'translate-to-bangla' && tab && tab.id) {
+    try {
+      chrome.tabs.sendMessage(
+        tab.id,
+        {
+          action: 'TRANSLATE_SELECTION',
+          text: info.selectionText || ''
+        },
+        () => {
+          if (chrome.runtime.lastError) {
+            console.debug('Context menu message delivery note:', chrome.runtime.lastError.message);
+          }
+        }
+      );
+    } catch (err) {
+      console.error('Error handling context menu translation:', err);
+    }
+  }
+});
+
+// Extension installation initialization, context menu creation, and migration
 chrome.runtime.onInstalled.addListener(async () => {
   try {
+    // 1. Context Menu Registration
+    try {
+      chrome.contextMenus.create({
+        id: 'translate-to-bangla',
+        title: 'Translate to Bangla',
+        contexts: ['selection']
+      });
+    } catch (menuErr) {
+      console.debug('Context menu registration note:', menuErr);
+    }
+
+    // 2. Storage Initialization
     const data = await chrome.storage.local.get(['enabled', 'recentWords', 'settings', 'tcache']);
 
     if (data.enabled === undefined) {

@@ -1,7 +1,7 @@
 /**
  * Content Script
  * Listens for double-click, hover, triple-click, mouse selection with floating "অ" action,
- * and keyboard shortcut (TRANSLATE_SELECTION) events.
+ * context menu trigger, and keyboard shortcut (TRANSLATE_SELECTION) events.
  * Extracts English words and sentences, renders an isolated accessible Shadow DOM floating tooltip,
  * supports queued dual-language text-to-speech, clipboard copying, theme adaptability (dark/light/auto),
  * collapsible original view, loading skeletons, and word highlighting via CSS Custom Highlight API.
@@ -22,6 +22,7 @@
 
   // Bangla voice availability (resolved once on page load and verified dynamically)
   let banglaVoiceAvailable = false;
+  let _cachedBanglaVoice = null;
 
   // Speech queue state
   let isSpeakingQueue = false;
@@ -35,7 +36,12 @@
     modifierKey: 'none',
     speechRate: 0.95,
     highlightColor: '#fde68a',
-    theme: 'dark'
+    theme: 'dark',
+    sentenceEnabled: true,
+    maxChars: 3000,
+    showOriginal: false,
+    floatingButton: true,
+    saveSentences: false
   };
 
   const HIGHLIGHT_NAME = 'eng-bn-word-highlight';
@@ -171,6 +177,7 @@
     if (typeof findBanglaVoice === 'function') {
       findBanglaVoice().then((voice) => {
         banglaVoiceAvailable = !!voice;
+        _cachedBanglaVoice = voice;
       }).catch(() => {
         banglaVoiceAvailable = false;
       });
@@ -208,6 +215,10 @@
         const mode = currentSettings.triggerMode || 'dblclick';
         if (mode !== 'hover' && mode !== 'both') {
           cancelHoverTimer();
+        }
+
+        if (!currentSettings.floatingButton || currentSettings.sentenceEnabled === false) {
+          hideFloatingButton();
         }
 
         // Live update custom highlight style
@@ -480,6 +491,10 @@
    * @param {DOMRect} selectionRect
    */
   function showFloatingButton(selectionRect) {
+    if (!currentSettings.floatingButton || currentSettings.sentenceEnabled === false) {
+      return;
+    }
+
     hideFloatingButton();
 
     const host = document.createElement('div');
@@ -693,35 +708,60 @@
   }
 
   /**
-   * Reads, validates, and translates the active webpage text selection.
-   * Reused by double-click, triple-click, floating button, and keyboard shortcuts (TRANSLATE_SELECTION).
+   * Reads, validates, and translates text selection.
+   * Reused by double-click, triple-click, floating button, context menu, and keyboard shortcuts.
+   * @param {string} [overrideText=''] - Optional text string (e.g. from context menu).
    * @returns {boolean} True if a valid selection was found and rendered.
    */
-  function triggerSelectionTranslation() {
+  function triggerSelectionTranslation(overrideText = '') {
     if (!isEnabled) return false;
 
     const selection = window.getSelection();
-    if (!selection || !selection.rangeCount) return false;
+    let textToTranslate = '';
+    let range = null;
+    let rect = null;
 
-    const rawSelected = selection.toString();
-    if (!rawSelected || !rawSelected.trim()) return false;
+    if (selection && selection.rangeCount > 0) {
+      const selectedStr = selection.toString();
+      if (selectedStr && selectedStr.trim()) {
+        textToTranslate = selectedStr;
+        range = selection.getRangeAt(0);
+        rect = range.getBoundingClientRect();
+      }
+    }
 
-    // Check if selection focus is within an ignored element
-    const anchorElem = selection.anchorNode
-      ? (selection.anchorNode.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode.parentElement)
-      : null;
+    if (overrideText && (!textToTranslate || !rect || (rect.width === 0 && rect.height === 0))) {
+      textToTranslate = overrideText;
+    }
 
-    if (anchorElem && isIgnoredElement(anchorElem)) return false;
+    if (!textToTranslate || !textToTranslate.trim()) return false;
 
-    const cleaned = rawSelected
+    // Check if selection focus is within an ignored element (unless overrideText was sent explicitly)
+    if (!overrideText && selection && selection.anchorNode) {
+      const anchorElem = selection.anchorNode.nodeType === Node.ELEMENT_NODE
+        ? selection.anchorNode
+        : selection.anchorNode.parentElement;
+      if (anchorElem && isIgnoredElement(anchorElem)) return false;
+    }
+
+    const cleaned = textToTranslate
       .replace(/^[\s.,/#!$%\^&\*;:{}=\-_`~()'"\[\]<>?]+|[\s.,/#!$%\^&\*;:{}=\-_`~()'"\[\]<>?]+$/g, '')
       .trim();
 
     if (!isValidEnglishText(cleaned)) return false;
 
-    const range = selection.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-    if (!rect || (rect.width === 0 && rect.height === 0)) return false;
+    // Check if sentence translation is disabled
+    const words = cleaned.split(/\s+/).filter(Boolean);
+    if (words.length > 3 && currentSettings.sentenceEnabled === false) {
+      return false;
+    }
+
+    // If rect is missing or zero (e.g. selection lost before context menu fires), create a fallback rect in viewport
+    if (!rect || (rect.width === 0 && rect.height === 0)) {
+      const vpWidth = document.documentElement.clientWidth;
+      const vpHeight = document.documentElement.clientHeight;
+      rect = new DOMRect(vpWidth / 2 - 100, Math.min(200, vpHeight / 3), 200, 24);
+    }
 
     hideFloatingButton();
     cancelHoverTimer();
@@ -771,7 +811,7 @@
    */
   function handleMouseUp(event) {
     setTimeout(() => {
-      if (!isEnabled) {
+      if (!isEnabled || !currentSettings.floatingButton || currentSettings.sentenceEnabled === false) {
         hideFloatingButton();
         return;
       }
@@ -1558,6 +1598,7 @@
             try {
               const voice = await findBanglaVoice();
               banglaVoiceAvailable = !!voice;
+              _cachedBanglaVoice = voice;
             } catch (err) {
               banglaVoiceAvailable = false;
             }
@@ -1606,15 +1647,18 @@
               noticesHTML += `<div class="sentence-notice approximate-notice">Offline approximate (word-by-word) translation.</div>`;
             }
 
+            // Respect showOriginal setting (unclamped by default if true)
+            const isClampedByDefault = !currentSettings.showOriginal;
+
             body.innerHTML = `
               <div class="original-section">
-                <div class="original-header" role="button" tabindex="0" aria-expanded="false">
+                <div class="original-header" role="button" tabindex="0" aria-expanded="${isClampedByDefault ? 'false' : 'true'}">
                   <span>Original</span>
-                  <svg class="original-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <svg class="original-arrow ${isClampedByDefault ? '' : 'open'}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
                   </svg>
                 </div>
-                <div class="original-content clamped" title="Click to expand/collapse">${escapeHtml(word)}</div>
+                <div class="original-content ${isClampedByDefault ? 'clamped' : ''}" title="Click to expand/collapse">${escapeHtml(word)}</div>
               </div>
               <div class="bangla-sentence-text">${escapeHtml(primaryBangla)}</div>
               ${noticesHTML}
@@ -1767,10 +1811,11 @@
       .replace(/'/g, '&#039;');
   }
 
-  // Handle messages from background service worker (keyboard shortcuts)
+  // Handle messages from background service worker (keyboard shortcuts & context menu)
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'TRANSLATE_SELECTION') {
-      const translated = triggerSelectionTranslation();
+      const selectedText = typeof message.text === 'string' ? message.text.trim() : '';
+      const translated = triggerSelectionTranslation(selectedText);
       sendResponse({ success: translated });
       return false;
     }
