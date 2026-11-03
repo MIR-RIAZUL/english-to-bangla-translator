@@ -19,7 +19,25 @@ A high-performance, production-ready Google Chrome extension that provides insta
   - Master **Enable / Disable Toggle Switch** (synced across tabs in real-time).
   - **Quick Translate Box** for translating typed or pasted words/sentences.
   - **Recent Words History** showing the last 5 lookups with pronunciation and copy buttons.
+  - Settings (⚙) button linking directly to the full Options page.
   - One-click translation copying with visual feedback.
+- **Full Options & Settings Panel (v2.0.0)**:
+  - Customizable trigger modes (`dblclick`, `hover`, `select`), hover delay, and modifier keys.
+  - Reorderable translation provider priority list (`official`, `gtx`, `mymemory`, `offline`).
+  - Speech synthesis rate customization with audio test button.
+  - Theme switching and custom highlight color selection.
+  - History retention limit configuration and one-click default reset.
+
+---
+
+## 🔒 Permissions & Host Permissions Explanation
+
+The extension requests only minimal permissions necessary for its core operation:
+
+- `storage`: Required to save user preferences (`settings` object), toggle status (`enabled`), and persistent lookup history (`recentWords`) across browser sessions using `chrome.storage.local`.
+- `activeTab`: Required to interact with the current webpage context when triggered and open extension options cleanly.
+- `https://translate.googleapis.com/*`: Required to fetch fast translations and comprehensive parts of speech from Google GTX endpoints.
+- `https://api.mymemory.translated.net/*`: Required to provide resilient fallback translations when Google's endpoints are unreachable.
 
 ---
 
@@ -27,17 +45,21 @@ A high-performance, production-ready Google Chrome extension that provides insta
 
 ```text
 mosuehoberTransalation/
-├── manifest.json       # Chrome Manifest V3 configuration
-├── background.js       # Background service worker (API requests, caching, CORS bypass)
+├── manifest.json       # Chrome Manifest V3 configuration (v2.0.0)
+├── settings.js         # Shared settings helper & default configuration
+├── background.js       # Background service worker (API requests, caching, migration)
 ├── content.js          # DOM double-click listener & Shadow DOM tooltip
-├── popup.html          # Toolbar extension control panel
+├── popup.html          # Toolbar extension control panel with settings button
 ├── popup.css           # Modern 320px styling with Bengali typography
 ├── popup.js            # Toolbar logic, toggle state, quick translator & recent words
+├── options.html        # Full settings & preferences page
+├── options.css         # Styling for options page matching popup dark theme
+├── options.js          # Options controller with automatic saving & reset
 ├── icons/              # Valid PNG extension icons
 │   ├── icon-16.png     # 16x16px icon
 │   ├── icon-48.png     # 48x48px icon
 │   └── icon-128.png    # 128x128px icon
-└── README.md           # Documentation & installation instructions
+└── README.md           # Documentation, permission explanations & installation guide
 ```
 
 ---
@@ -64,5 +86,11 @@ mosuehoberTransalation/
 2. **From the Extension Toolbar**:
    - Click the extension icon in your Chrome toolbar.
    - Toggle the master switch to enable or disable double-click translation at any time.
+   - Click the ⚙ (gear) icon in the header to open the Options page.
    - Type or paste any word or sentence in the **Quick Translate** box and press **Enter** or click **Translate**.
    - Review your **Recent Words** or click any word to reload it in the translator.
+
+3. **In the Options Page**:
+   - Open options by right-clicking the extension icon and choosing **Options**, or via the gear icon in the popup.
+   - Adjust interaction triggers, provider priorities, speech rate, colors, and limits.
+   - Changes are saved automatically in real-time. Use **Reset to Defaults** to restore factory settings.

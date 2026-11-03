@@ -1,7 +1,7 @@
 /**
  * Popup Script
  * Handles toggle state persistence, quick manual translation,
- * speech synthesis pronunciation, and recent word history rendering.
+ * speech synthesis pronunciation, options navigation, and recent word history rendering.
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const enableToggle = document.getElementById('enableToggle');
   const statusPill = document.getElementById('statusPill');
   const statusLabel = document.getElementById('statusLabel');
+  const openOptionsBtn = document.getElementById('openOptionsBtn');
 
   const quickInput = document.getElementById('quickInput');
   const clearInputBtn = document.getElementById('clearInputBtn');
@@ -27,9 +28,28 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentTranslatedText = '';
 
   // -------------------------------------------------------------
-  // 1. Master Toggle & Storage Sync
+  // 1. Navigation & Master Toggle
   // -------------------------------------------------------------
 
+  // Open Options page
+  if (openOptionsBtn) {
+    openOptionsBtn.addEventListener('click', () => {
+      try {
+        if (chrome.runtime.openOptionsPage) {
+          chrome.runtime.openOptionsPage();
+        } else {
+          window.open(chrome.runtime.getURL('options.html'));
+        }
+      } catch (err) {
+        console.error('Failed to open options page:', err);
+      }
+    });
+  }
+
+  /**
+   * Updates toggle switch visual status badge.
+   * @param {boolean} isEnabled
+   */
   function updateStatusUI(isEnabled) {
     enableToggle.checked = isEnabled;
     if (isEnabled) {
@@ -49,9 +69,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Toggle switch listener
   enableToggle.addEventListener('change', async () => {
-    const isChecked = enableToggle.checked;
-    await chrome.storage.local.set({ enabled: isChecked });
-    updateStatusUI(isChecked);
+    try {
+      const isChecked = enableToggle.checked;
+      await chrome.storage.local.set({ enabled: isChecked });
+      updateStatusUI(isChecked);
+    } catch (err) {
+      console.error('Failed to save toggle state:', err);
+    }
   });
 
   // Listen for storage changes from background or other tabs
@@ -70,6 +94,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // 2. Quick Translate Logic
   // -------------------------------------------------------------
 
+  /**
+   * Syncs character count and button availability with input textarea.
+   */
   function updateInputControls() {
     const text = quickInput.value;
     const trimmed = text.trim();
@@ -102,6 +129,9 @@ document.addEventListener('DOMContentLoaded', () => {
     executeQuickTranslate();
   });
 
+  /**
+   * Sends text to background service worker for translation and renders the result.
+   */
   async function executeQuickTranslate() {
     const text = quickInput.value.trim();
     if (!text) {
@@ -193,6 +223,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // 3. Pronunciation Helper
   // -------------------------------------------------------------
 
+  /**
+   * Pronounces text in English via SpeechSynthesis.
+   * @param {string} text
+   * @param {HTMLElement} [btnElement]
+   */
   function pronounceText(text, btnElement) {
     if (!('speechSynthesis' in window)) return;
     try {
@@ -217,6 +252,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // 4. Recent Words History
   // -------------------------------------------------------------
 
+  /**
+   * Renders the recent translated words in the popup card.
+   * @param {Array<Object>} list
+   */
   function renderRecentWords(list) {
     if (!Array.isArray(list) || list.length === 0) {
       recentList.innerHTML = `
@@ -312,14 +351,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Clear Recent History
   clearRecentBtn.addEventListener('click', async () => {
-    await chrome.storage.local.set({ recentWords: [] });
-    renderRecentWords([]);
+    try {
+      await chrome.storage.local.set({ recentWords: [] });
+      renderRecentWords([]);
+    } catch (err) {
+      console.error('Failed to clear recent words:', err);
+    }
   });
 
   // -------------------------------------------------------------
   // 5. Utility
   // -------------------------------------------------------------
 
+  /**
+   * Sanitizes text to prevent HTML injection.
+   * @param {string} str
+   * @returns {string}
+   */
   function escapeHtml(str) {
     if (!str) return '';
     return String(str)

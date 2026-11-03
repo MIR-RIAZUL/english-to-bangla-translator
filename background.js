@@ -4,6 +4,12 @@
  * in-memory caching, fallback provider, and persistence of recent lookups.
  */
 
+try {
+  importScripts('settings.js');
+} catch (e) {
+  console.warn('Failed to load settings.js in Service Worker:', e);
+}
+
 // In-memory cache for fast repeated lookups (LRU-like cap)
 const translationCache = new Map();
 const MAX_CACHE_ENTRIES = 300;
@@ -258,17 +264,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Extension installation initialization
+// Extension installation initialization and migration
 chrome.runtime.onInstalled.addListener(async () => {
   try {
-    const data = await chrome.storage.local.get(['enabled', 'recentWords']);
+    const data = await chrome.storage.local.get(['enabled', 'recentWords', 'settings']);
+
+    // Preserve existing enabled state or set default
     if (data.enabled === undefined) {
       await chrome.storage.local.set({ enabled: true });
     }
+
+    // Preserve existing recentWords or initialize empty array
     if (!Array.isArray(data.recentWords)) {
       await chrome.storage.local.set({ recentWords: [] });
     }
+
+    // Migration / initialization for settings
+    // getSettings() safely merges any existing data.settings with DEFAULT_SETTINGS
+    if (typeof getSettings === 'function') {
+      const initializedSettings = await getSettings();
+      await chrome.storage.local.set({ settings: initializedSettings });
+    } else {
+      const fallbackSettings = {
+        triggerMode: 'dblclick',
+        hoverDelay: 600,
+        modifierKey: 'none',
+        speechRate: 0.95,
+        apiKey: '',
+        providerOrder: ['official', 'gtx', 'mymemory', 'offline'],
+        historyLimit: 200,
+        highlightColor: '#fde68a',
+        theme: 'dark',
+        offlineEnabled: true,
+        ...(data.settings || {})
+      };
+      await chrome.storage.local.set({ settings: fallbackSettings });
+    }
   } catch (error) {
-    console.error('Initialization error:', error);
+    console.error('Initialization and migration error in onInstalled:', error);
   }
 });

@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Options - English to Bangla Translator</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="options-container">
+    <!-- Header -->
+    <header class="options-header">
+      <div class="header-brand">
+        <div class="brand-badge">
+          <span>অ</span>
+        </div>
+        <div class="brand-info">
+          <h1>English to Bangla Translator</h1>
+          <p class="brand-sub">Options & Preferences</p>
+        </div>
+      </div>
+      <div id="saveStatus" class="save-pill" style="opacity: 0;">
+        <span class="save-dot"></span>
+        <span id="saveStatusText">Settings saved</span>
+      </div>
+    </header>
+
+    <main class="options-main">
+      <!-- 1. Trigger & Interaction -->
+      <section class="settings-card">
+        <div class="card-title-row">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="card-heading">Trigger & Interaction</h2>
+            <p class="card-subheading">Choose how words on webpages are activated for translation</p>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <!-- Trigger Mode -->
+          <div class="setting-item">
+            <div class="setting-label-col">
+              <label for="triggerMode" class="setting-title">Trigger Mode</label>
+              <span class="setting-hint">Event that triggers the in-page translation tooltip</span>
+            </div>
+            <div class="setting-control-col">
+              <select id="triggerMode" class="form-select">
+                <option value="dblclick">Double-Click (Default)</option>
+                <option value="hover">Mouse Hover</option>
+                <option value="select">Text Selection</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Hover Delay -->
+          <div class="setting-item" id="hoverDelayRow">
+            <div class="setting-label-col">
+              <label for="hoverDelay" class="setting-title">Hover Delay</label>
+              <span class="setting-hint">Milliseconds to pause before translating hovered words</span>
+            </div>
+            <div class="setting-control-col slider-control-wrap">
+              <input type="range" id="hoverDelay" min="200" max="2000" step="50" value="600" class="form-range">
+              <span id="hoverDelayValue" class="value-badge">600 ms</span>
+            </div>
+          </div>
+
+          <!-- Modifier Key -->
+          <div class="setting-item">
+            <div class="setting-label-col">
+              <label for="modifierKey" class="setting-title">Modifier Key Required</label>
+              <span class="setting-hint">Hold this key while triggering to activate tooltip</span>
+            </div>
+            <div class="setting-control-col">
+              <select id="modifierKey" class="form-select">
+                <option value="none">None (Direct trigger)</option>
+                <option value="alt">Alt Key</option>
+                <option value="ctrl">Ctrl / Control Key</option>
+                <option value="shift">Shift Key</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Translation Providers & API -->
+      <section class="settings-card">
+        <div class="card-title-row">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="card-heading">Translation Providers & Priority</h2>
+            <p class="card-subheading">Configure fallback order and official API credentials</p>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <!-- Provider Order -->
+          <div class="setting-item vertical-layout">
+            <div class="setting-label-col">
+              <label class="setting-title">Provider Fallback Order</label>
+              <span class="setting-hint">Top provider will be tried first; subsequent providers serve as failover fallbacks.</span>
+            </div>
+            <div class="provider-order-container" id="providerOrderList">
+              <!-- Rendered dynamically by options.js -->
+            </div>
+          </div>
+
+          <!-- Official API Key -->
+          <div class="setting-item">
+            <div class="setting-label-col">
+              <label for="apiKey" class="setting-title">Google Cloud API Key</label>
+              <span class="setting-hint">Optional official key for high-volume Translation API v2</span>
+            </div>
+            <div class="setting-control-col api-key-control">
+              <div class="input-with-button">
+                <input type="password" id="apiKey" placeholder="AIzaSy..." class="form-input">
+                <button type="button" id="toggleApiKeyVisibility" class="icon-toggle-btn" title="Show/Hide API Key">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-icon">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Offline Mode Toggle -->
+          <div class="setting-item">
+            <div class="setting-label-col">
+              <label for="offlineEnabled" class="setting-title">Enable Offline Dictionary</label>
+              <span class="setting-hint">Allow translating common words when internet connection is lost</span>
+            </div>
+            <div class="setting-control-col">
+              <label class="switch" for="offlineEnabled">
+                <input type="checkbox" id="offlineEnabled" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Pronunciation & Audio -->
+      <section class="settings-card">
+        <div class="card-title-row">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="card-heading">Audio & Pronunciation</h2>
+            <p class="card-subheading">Fine-tune English voice playback speeds</p>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <!-- Speech Rate -->
+          <div class="setting-item">
+            <div class="setting-label-col">
+              <label for="speechRate" class="setting-title">Speech Rate</label>
+              <span class="setting-hint">Playback speed for native speech synthesis (default: 0.95x)</span>
+            </div>
+            <div class="setting-control-col slider-control-wrap">
+              <input type="range" id="speechRate" min="0.5" max="1.5" step="0.05" value="0.95" class="form-range">
+              <span id="speechRateValue" class="value-badge">0.95x</span>
+              <button type="button" id="testSpeechBtn" class="btn btn-secondary btn-sm" title="Test speech synthesis">
+                Test
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. Appearance & Highlighting -->
+      <section class="settings-card">
+        <div class="card-title-row">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M7 21a4 4 0 01-4-4 5 5 0 015-5 4 4 0 014 4 4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="card-heading">Appearance & Highlighting</h2>
+            <p class="card-subheading">Customize themes and text selection colors</p>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <!-- Theme -->
+          <div class="setting-item">
+            <div class="setting-label-col">
+              <label for="theme" class="setting-title">Color Theme</label>
+              <span class="setting-hint">Interface theme for tooltips and extension panels</span>
+            </div>
+            <div class="setting-control-col">
+              <select id="theme" class="form-select">
+                <option value="dark">Dark Theme (Default)</option>
+                <option value="light">Light Theme</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Highlight Color -->
+          <div class="setting-item">
+            <div class="setting-label-col">
+              <label for="highlightColor" class="setting-title">Selection Highlight Color</label>
+              <span class="setting-hint">Background tint for translated words on webpages</span>
+            </div>
+            <div class="setting-control-col color-control-wrap">
+              <input type="color" id="highlightColor" value="#fde68a" class="form-color">
+              <span id="highlightColorValue" class="value-badge">#fde68a</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. History & Storage -->
+      <section class="settings-card">
+        <div class="card-title-row">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-icon">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="card-heading">History & Storage</h2>
+            <p class="card-subheading">Manage lookup logs and storage capacity</p>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <!-- History Limit -->
+          <div class="setting-item">
+            <div class="setting-label-col">
+              <label for="historyLimit" class="setting-title">Recent History Limit</label>
+              <span class="setting-hint">Maximum number of words retained in local history (10 - 1000)</span>
+            </div>
+            <div class="setting-control-col">
+              <input type="number" id="historyLimit" min="10" max="1000" step="10" value="200" class="form-input form-input-number">
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Action Footer -->
+      <footer class="options-footer">
+        <button type="button" id="resetBtn" class="btn btn-danger">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span>Reset to Defaults</span>
+        </button>
+        <span class="footer-note">All changes are saved automatically to local storage</span>
+      </footer>
+    </main>
+  </div>
+
+  <script src="settings.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
+
