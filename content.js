@@ -17,7 +17,7 @@
   let hoverTimer = null;
   let pendingHoverWord = '';
 
-  // Bangla voice availability (resolved once on page load)
+  // Bangla voice availability (resolved once on page load and verified dynamically)
   let banglaVoiceAvailable = false;
 
   // Settings state with safe defaults
@@ -361,7 +361,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
         </svg>
       `;
-      btn.title = 'কপি হয়েছে!';
+      btn.title = 'কপি হয়েছে!';
       setTimeout(() => {
         if (btn) {
           btn.innerHTML = originalHTML;
@@ -793,7 +793,7 @@
           <span class="original-word" title="${escapeHtml(word)}">${escapeHtml(word)}</span>
         </div>
         <div class="header-actions">
-          <button class="icon-btn btn-speak-en" title="উচ্চারণ শুনুন (English)" aria-label="Pronounce English word">
+          <button class="icon-btn btn-speak btn-speak-en" title="উচ্চারণ শুনুন (English)" aria-label="Pronounce English word">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
               <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
             </svg>
@@ -847,7 +847,7 @@
         text: word,
         isDoubleClick: true
       },
-      (response) => {
+      async (response) => {
         if (!activeTooltipHost || activeTooltipHost !== host) return;
 
         const body = card.querySelector('.card-body');
@@ -890,11 +890,21 @@
               .join('');
           }
 
+          // Dynamically check if Bangla voice is available if not detected initially
+          if (!banglaVoiceAvailable && typeof findBanglaVoice === 'function') {
+            try {
+              const voice = await findBanglaVoice();
+              banglaVoiceAvailable = !!voice;
+            } catch (err) {
+              banglaVoiceAvailable = false;
+            }
+          }
+
           // Build Bangla speak button HTML
           const bnBtnDisabled = !banglaVoiceAvailable;
           const bnBtnTitle = bnBtnDisabled
             ? 'No Bangla voice installed on this device.'
-            : 'বাংলা উচ্চারণ শুনুন (Bangla)';
+            : 'বাংলা উচ্চারণ শুনুন';
           const bnBtnAriaLabel = bnBtnDisabled
             ? 'No Bangla voice installed on this device.'
             : 'Pronounce Bangla translation';

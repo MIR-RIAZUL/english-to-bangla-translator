@@ -76,21 +76,21 @@ async function findBanglaVoice() {
     if (!voices || voices.length === 0) return null;
 
     // Prefer bn-BD (Bangladesh Bengali)
-    let voice = voices.find((v) => v.lang === 'bn-BD');
+    let voice = voices.find((v) => v.lang === 'bn-BD' || v.lang === 'bn_BD');
     if (voice) {
       _cachedBanglaVoice = voice;
       return voice;
     }
 
     // Next prefer bn-IN (Indian Bengali)
-    voice = voices.find((v) => v.lang === 'bn-IN');
+    voice = voices.find((v) => v.lang === 'bn-IN' || v.lang === 'bn_IN');
     if (voice) {
       _cachedBanglaVoice = voice;
       return voice;
     }
 
     // Fallback: any voice whose lang starts with "bn"
-    voice = voices.find((v) => v.lang && v.lang.startsWith('bn'));
+    voice = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('bn'));
     if (voice) {
       _cachedBanglaVoice = voice;
       return voice;
@@ -105,8 +105,8 @@ async function findBanglaVoice() {
 /**
  * Speaks the given text using the Web Speech API.
  * @param {string} text - The text to speak.
- * @param {string} lang - BCP 47 language tag (e.g. "en-US", "bn-BD").
- * @param {number} rate - Speech playback rate (0.1–10, typically 0.5–2).
+ * @param {string} [lang='en-US'] - BCP 47 language tag (e.g. "en-US", "bn-BD").
+ * @param {number} [rate=0.95] - Speech playback rate (0.1–10, typically 0.5–2).
  * @param {HTMLElement} [buttonElement] - Optional button to visually indicate playback state.
  */
 function speak(text, lang, rate, buttonElement) {
@@ -117,12 +117,22 @@ function speak(text, lang, rate, buttonElement) {
     window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang || 'en-US';
+    const targetLang = lang || 'en-US';
+    utterance.lang = targetLang;
     utterance.rate = typeof rate === 'number' && rate > 0 ? rate : 0.95;
 
     // If speaking Bangla, attach the detected voice object
-    if (lang && lang.startsWith('bn') && _cachedBanglaVoice) {
-      utterance.voice = _cachedBanglaVoice;
+    if (targetLang.toLowerCase().startsWith('bn')) {
+      if (!_cachedBanglaVoice && 'speechSynthesis' in window) {
+        const voices = window.speechSynthesis.getVoices() || [];
+        _cachedBanglaVoice = voices.find((v) => v.lang === 'bn-BD' || v.lang === 'bn_BD') ||
+                             voices.find((v) => v.lang === 'bn-IN' || v.lang === 'bn_IN') ||
+                             voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('bn')) ||
+                             null;
+      }
+      if (_cachedBanglaVoice) {
+        utterance.voice = _cachedBanglaVoice;
+      }
     }
 
     if (buttonElement) {
@@ -146,4 +156,3 @@ if (typeof globalThis !== 'undefined') {
   globalThis.findBanglaVoice = findBanglaVoice;
   globalThis.speak = speak;
 }
-

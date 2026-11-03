@@ -1,10 +1,11 @@
 /**
  * Popup Script
  * Handles toggle state persistence, quick manual translation,
- * speech synthesis pronunciation, options navigation, and recent word history rendering.
+ * speech synthesis pronunciation (English and Bangla), options navigation,
+ * and recent word history rendering.
  */
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   // DOM Elements
   const enableToggle = document.getElementById('enableToggle');
   const statusPill = document.getElementById('statusPill');
@@ -19,6 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const resultBox = document.getElementById('resultBox');
   const primaryResult = document.getElementById('primaryResult');
+  const speakResultBtn = document.getElementById('speakResultBtn');
   const dictMeanings = document.getElementById('dictMeanings');
   const copyResultBtn = document.getElementById('copyResultBtn');
   const popupOfflineBadge = document.getElementById('popupOfflineBadge');
@@ -27,6 +29,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const clearRecentBtn = document.getElementById('clearRecentBtn');
 
   let currentTranslatedText = '';
+  let banglaVoiceAvailable = false;
+  let currentSpeechRate = 0.95;
 
   // -------------------------------------------------------------
   // 1. Navigation & Master Toggle
@@ -62,11 +66,51 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Load initial settings
-  chrome.storage.local.get({ enabled: true, recentWords: [] }, (items) => {
+  /**
+   * Updates the Bangla speech button state based on voice availability and translated text.
+   */
+  function updateBanglaSpeakButtonState() {
+    if (!speakResultBtn) return;
+
+    if (!banglaVoiceAvailable) {
+      speakResultBtn.disabled = true;
+      speakResultBtn.title = 'No Bangla voice installed on this device.';
+      speakResultBtn.setAttribute('aria-label', 'No Bangla voice installed on this device.');
+    } else {
+      speakResultBtn.disabled = !currentTranslatedText;
+      speakResultBtn.title = 'বাংলা উচ্চারণ শুনুন';
+      speakResultBtn.setAttribute('aria-label', 'Pronounce Bangla translation');
+    }
+  }
+
+  // Load initial settings and state
+  try {
+    const items = await chrome.storage.local.get({ enabled: true, recentWords: [], settings: {} });
     updateStatusUI(items.enabled !== false);
     renderRecentWords(items.recentWords || []);
-  });
+
+    if (items.settings && typeof items.settings.speechRate === 'number') {
+      currentSpeechRate = items.settings.speechRate;
+    } else if (typeof getSettings === 'function') {
+      const settings = await getSettings();
+      if (typeof settings.speechRate === 'number') {
+        currentSpeechRate = settings.speechRate;
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to load initial settings in popup:', err);
+  }
+
+  // Initialize Bangla voice detection
+  try {
+    if (typeof findBanglaVoice === 'function') {
+      const voice = await findBanglaVoice();
+      banglaVoiceAvailable = !!voice;
+    }
+  } catch (err) {
+    banglaVoiceAvailable = false;
+  }
+  updateBanglaSpeakButtonState();
 
   // Toggle switch listener
   enableToggle.addEventListener('change', async () => {
@@ -79,7 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Listen for storage changes from background or other tabs
+  // Listen for storage changes from background or options
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local') {
       if (changes.enabled !== undefined) {
@@ -87,6 +131,11 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (changes.recentWords !== undefined) {
         renderRecentWords(changes.recentWords.newValue || []);
+      }
+      if (changes.settings !== undefined && changes.settings.newValue) {
+        if (typeof changes.settings.newValue.speechRate === 'number') {
+          currentSpeechRate = changes.settings.newValue.speechRate;
+        }
       }
     }
   });
@@ -120,9 +169,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Clear input
   clearInputBtn.addEventListener('click', () => {
     quickInput.value = '';
+    currentTranslatedText = '';
     updateInputControls();
     resultBox.style.display = 'none';
     if (popupOfflineBadge) popupOfflineBadge.style.display = 'none';
+    updateBanglaSpeakButtonState();
     quickInput.focus();
   });
 
@@ -146,6 +197,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (popupOfflineBadge) popupOfflineBadge.style.display = 'none';
     primaryResult.innerHTML = '<span class="loading-text">অনুবাদ করা হচ্ছে...</span>';
     dictMeanings.innerHTML = '';
+    currentTranslatedText = '';
+    updateBanglaSpeakButtonState();
     translateBtn.disabled = true;
 
     try {
@@ -162,6 +215,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = response.data;
             currentTranslatedText = data.primary || '';
             primaryResult.textContent = currentTranslatedText;
+            updateBanglaSpeakButtonState();
 
             // Show or hide offline badge
             if (popupOfflineBadge) {
@@ -189,6 +243,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const errorMsg = response?.error || 'অনুবাদ সম্পন্ন করা যায়নি।';
             primaryResult.innerHTML = `<span style="color: #f87171; font-size: 13px;">${escapeHtml(errorMsg)}</span>`;
             dictMeanings.innerHTML = '';
+            currentTranslatedText = '';
+            updateBanglaSpeakButtonState();
             if (popupOfflineBadge) popupOfflineBadge.style.display = 'none';
           }
         }
@@ -196,6 +252,8 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       translateBtn.disabled = false;
       primaryResult.innerHTML = `<span style="color: #f87171; font-size: 13px;">অনুবাদ ত্রুটি: ${escapeHtml(err.message)}</span>`;
+      currentTranslatedText = '';
+      updateBanglaSpeakButtonState();
       if (popupOfflineBadge) popupOfflineBadge.style.display = 'none';
     }
   }
@@ -225,41 +283,33 @@ document.addEventListener('DOMContentLoaded', () => {
   speakInputBtn.addEventListener('click', () => {
     const text = quickInput.value.trim();
     if (text) {
-      pronounceText(text, speakInputBtn);
+      try {
+        if (typeof speak === 'function') {
+          speak(text, 'en-US', currentSpeechRate, speakInputBtn);
+        }
+      } catch (err) {
+        console.warn('English speech error:', err);
+      }
     }
   });
 
-  // -------------------------------------------------------------
-  // 3. Pronunciation Helper
-  // -------------------------------------------------------------
-
-  /**
-   * Pronounces text in English via SpeechSynthesis.
-   * @param {string} text
-   * @param {HTMLElement} [btnElement]
-   */
-  function pronounceText(text, btnElement) {
-    if (!('speechSynthesis' in window)) return;
-    try {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'en-US';
-      utterance.rate = 0.95;
-
-      if (btnElement) {
-        btnElement.style.opacity = '0.7';
-        utterance.onend = () => { btnElement.style.opacity = '1'; };
-        utterance.onerror = () => { btnElement.style.opacity = '1'; };
+  // Speech pronunciation for Bangla translation result
+  if (speakResultBtn) {
+    speakResultBtn.addEventListener('click', () => {
+      if (currentTranslatedText && banglaVoiceAvailable) {
+        try {
+          if (typeof speak === 'function') {
+            speak(currentTranslatedText, 'bn-BD', currentSpeechRate, speakResultBtn);
+          }
+        } catch (err) {
+          console.warn('Bangla speech error:', err);
+        }
       }
-
-      window.speechSynthesis.speak(utterance);
-    } catch (err) {
-      console.warn('Speech synthesis error:', err);
-    }
+    });
   }
 
   // -------------------------------------------------------------
-  // 4. Recent Words History
+  // 3. Recent Words History
   // -------------------------------------------------------------
 
   /**
@@ -329,7 +379,15 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const word = btn.getAttribute('data-word');
-        if (word) pronounceText(word, btn);
+        if (word) {
+          try {
+            if (typeof speak === 'function') {
+              speak(word, 'en-US', currentSpeechRate, btn);
+            }
+          } catch (err) {
+            console.warn('Recent word speak error:', err);
+          }
+        }
       });
     });
 
@@ -370,7 +428,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // -------------------------------------------------------------
-  // 5. Utility
+  // 4. Utility
   // -------------------------------------------------------------
 
   /**

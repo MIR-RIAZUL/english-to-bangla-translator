@@ -21,6 +21,7 @@
         "<all_urls>"
       ],
       "js": [
+        "tts.js",
         "content.js"
       ],
       "run_at": "document_idle"

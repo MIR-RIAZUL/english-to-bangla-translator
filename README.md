@@ -7,6 +7,12 @@ A high-performance, production-ready Google Chrome extension that provides insta
 ## ✨ Features
 
 - **Double-Click Instant Translation**: Double-click any English word on any webpage to see its Bangla meaning in a floating, non-intrusive tooltip.
+- **Dual-Language Text-to-Speech (TTS)**:
+  - English speech button (`🔊`) to hear native English pronunciation.
+  - Bangla speech button (`🔊`) next to the primary Bengali translation in both tooltips and popup.
+  - Automatic Bangla voice detection preferring `bn-BD` (Bangladesh) followed by `bn-IN` (India).
+  - Graceful fallback with informative disabled state tooltip when no Bangla voice is installed on the host operating system.
+  - Speech playback rates for both languages respect user-configured `settings.speechRate`.
 - **Keyboard Shortcuts**:
   - `Alt+T`: Translate the currently highlighted text on any webpage.
   - `Alt+Shift+T`: Toggle extension translation on or off globally.
@@ -31,7 +37,6 @@ A high-performance, production-ready Google Chrome extension that provides insta
 - **Two-Tier Caching Architecture**:
   - **Memory Cache**: High-speed LRU-capped in-memory map (300 entries).
   - **Persistent Cache**: `chrome.storage.local` store under key `tcache` (up to 1,000 entries with automatic oldest-entry eviction).
-- **Audio Pronunciation**: High-clarity native speech pronunciation using the Web Speech API (`window.speechSynthesis`).
 - **Comprehensive Meanings & Parts of Speech**: Displays primary Bengali translation plus part-of-speech breakdowns (nouns, verbs, adjectives, etc.) and alternative synonyms.
 - **CORS-Free Architecture**: Translation requests execute inside the Background Service Worker (`background.js`) to bypass page-level Content Security Policies (CSP) and CORS restrictions.
 - **Toolbar Control Panel (Popup UI)**:
@@ -86,13 +91,14 @@ The extension requests only minimal permissions necessary for its core operation
 
 ```text
 mosuehoberTransalation/
-├── manifest.json       # Chrome Manifest V3 configuration (v2.0.0) with commands
+├── manifest.json       # Chrome Manifest V3 configuration (v2.0.0) with commands & tts
+├── tts.js              # Speech synthesis module with Bangla voice detection (bn-BD / bn-IN)
 ├── settings.js         # Shared settings helper & default configuration
 ├── lemmatize.js        # Morphological root extractor (-ing, -ed, plurals, doubled consonants)
 ├── background.js       # Background service worker (caching, official API, offline fallback, commands listener)
 ├── content.js          # DOM double-click & hover listener, Shadow DOM tooltip, shortcut handler
-├── popup.html          # Toolbar extension control panel with settings button
-├── popup.css           # Modern 320px styling with local font declarations
+├── popup.html          # Toolbar extension control panel with settings button & Bangla audio
+├── popup.css           # Modern 320px styling with local font declarations & playing states
 ├── popup.js            # Toolbar logic, toggle state, quick translator & recent words
 ├── options.html        # Full settings & preferences page with API key tester & shortcuts launcher
 ├── options.css         # Styling for options page with local font declarations
@@ -129,7 +135,8 @@ mosuehoberTransalation/
 
 1. **On Any Webpage**:
    - Double-click any English word (e.g. *knowledge*, *beautiful*, *freedom*), or select a word and press `Alt+T`.
-   - A sleek floating tooltip appears right above (or below) the word with its Bangla meaning and pronunciation button.
+   - A sleek floating tooltip appears right above (or below) the word with its Bangla meaning.
+   - Click the English speaker icon in the header to hear English pronunciation, or click the Bangla speaker icon next to the Bengali text to hear it spoken in Bangla.
    - If offline or disconnected from the internet, the translation is retrieved instantly from the local dictionary and displays a yellow **OFFLINE** badge.
    - Click outside, scroll, or press `Escape` to dismiss the tooltip.
 
@@ -142,6 +149,7 @@ mosuehoberTransalation/
    - Toggle the master switch to enable or disable double-click translation at any time.
    - Click the ⚙ (gear) icon in the header to open the Options page.
    - Type or paste any word or sentence in the **Quick Translate** box and press **Enter** or click **Translate**.
+   - Listen to the English input or Bangla translation via their respective speaker buttons.
    - Review your **Recent Words** or click any word to reload it in the translator.
 
 4. **In the Options Page**:
