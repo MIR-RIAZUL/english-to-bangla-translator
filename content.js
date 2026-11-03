@@ -1,15 +1,28 @@
 /**
  * Content Script
- * Listens for double-click events, extracts English words, renders an isolated
- * Shadow DOM floating tooltip, and manages pronunciation & dismissal events.
+ * Listens for double-click and hover events according to user settings,
+ * extracts English words, renders an isolated Shadow DOM floating tooltip,
+ * and manages pronunciation, clipboard copy, and dismissal events.
  */
 
 (() => {
-  // Global state for enabling/disabling double click translation
+  // Global state for enabling/disabling translation
   let isEnabled = true;
   let activeTooltipHost = null;
+  let currentActiveWord = '';
   let scrollStartY = 0;
   let scrollStartX = 0;
+
+  // Hover state
+  let hoverTimer = null;
+  let pendingHoverWord = '';
+
+  // Settings state with safe defaults
+  let currentSettings = {
+    triggerMode: 'dblclick',
+    hoverDelay: 600,
+    modifierKey: 'none'
+  };
 
   /**
    * Injects local extension @font-face definitions into document.head once per page.
@@ -69,24 +82,162 @@
   // Attempt initial font registration
   ensureLocalFontsInjected();
 
-  // Retrieve initial enabled state from chrome.storage.local
-  chrome.storage.local.get({ enabled: true }, (result) => {
+  // Retrieve initial enabled state and settings from chrome.storage.local
+  chrome.storage.local.get({ enabled: true, settings: {} }, (result) => {
     if (chrome.runtime.lastError) {
       console.warn('Storage read warning:', chrome.runtime.lastError);
       return;
     }
     isEnabled = result.enabled !== false;
+    if (result.settings && typeof result.settings === 'object') {
+      currentSettings = { ...currentSettings, ...result.settings };
+    }
   });
 
-  // Listen for real-time toggle changes from popup or options
+  // Listen for real-time changes from popup or options
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.enabled !== undefined) {
-      isEnabled = changes.enabled.newValue !== false;
-      if (!isEnabled) {
-        removeTooltip();
+    if (area === 'local') {
+      if (changes.enabled !== undefined) {
+        isEnabled = changes.enabled.newValue !== false;
+        if (!isEnabled) {
+          removeTooltip();
+          cancelHoverTimer();
+        }
+      }
+      if (changes.settings !== undefined && changes.settings.newValue) {
+        currentSettings = { ...currentSettings, ...changes.settings.newValue };
+        const mode = currentSettings.triggerMode || 'dblclick';
+        if (mode !== 'hover' && mode !== 'both') {
+          cancelHoverTimer();
+        }
       }
     }
   });
+
+  /**
+   * Checks whether the configured modifier key is pressed.
+   * @param {MouseEvent} event
+   * @returns {boolean} True if required modifier key is active or 'none' is configured.
+   */
+  function isModifierKeyActive(event) {
+    const mod = currentSettings.modifierKey || 'none';
+    if (mod === 'none') return true;
+    if (mod === 'alt') return !!event.altKey;
+    if (mod === 'ctrl') return !!event.ctrlKey || !!event.metaKey;
+    if (mod === 'shift') return !!event.shiftKey;
+    return true;
+  }
+
+  /**
+   * Determines whether an element should be ignored for translation triggers.
+   * Ignores input, textarea, password fields, and contentEditable elements.
+   * @param {Element|null} target
+   * @returns {boolean}
+   */
+  function isIgnoredElement(target) {
+    if (!target || !(target instanceof Element)) return false;
+
+    const tagName = target.tagName;
+    if (tagName === 'INPUT' || tagName === 'TEXTAREA') {
+      return true;
+    }
+
+    if (target.isContentEditable || (target.closest && target.closest('[contenteditable="true"]'))) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Extracts the word and bounding client rectangle under a given viewport point.
+   * Uses document.caretRangeFromPoint with fallback to document.caretPositionFromPoint.
+   * @param {number} x - Client X coordinate.
+   * @param {number} y - Client Y coordinate.
+   * @returns {{ word: string, rect: DOMRect } | null}
+   */
+  function getWordAtPoint(x, y) {
+    let textNode = null;
+    let offset = 0;
+
+    try {
+      if (document.caretRangeFromPoint) {
+        const range = document.caretRangeFromPoint(x, y);
+        if (range && range.startContainer && range.startContainer.nodeType === Node.TEXT_NODE) {
+          textNode = range.startContainer;
+          offset = range.startOffset;
+        }
+      } else if (document.caretPositionFromPoint) {
+        const pos = document.caretPositionFromPoint(x, y);
+        if (pos && pos.offsetNode && pos.offsetNode.nodeType === Node.TEXT_NODE) {
+          textNode = pos.offsetNode;
+          offset = pos.offset;
+        }
+      }
+
+      if (!textNode || !textNode.textContent) return null;
+
+      const text = textNode.textContent;
+      if (!text) return null;
+
+      let charIdx = offset;
+      if (charIdx >= text.length || !/[a-zA-Z]/.test(text[charIdx])) {
+        if (charIdx > 0 && /[a-zA-Z]/.test(text[charIdx - 1])) {
+          charIdx = charIdx - 1;
+        } else {
+          return null;
+        }
+      }
+
+      // Expand backward to find word start
+      let start = charIdx;
+      while (start > 0 && /[a-zA-Z0-9'-]/.test(text[start - 1])) {
+        start--;
+      }
+
+      // Expand forward to find word end
+      let end = charIdx;
+      while (end < text.length && /[a-zA-Z0-9'-]/.test(text[end])) {
+        end++;
+      }
+
+      const rawWord = text.slice(start, end);
+      const cleaned = rawWord.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, '').trim();
+
+      if (!cleaned || !/[a-zA-Z]/.test(cleaned) || cleaned.length < 2) {
+        return null;
+      }
+
+      const actualStart = text.indexOf(cleaned, start);
+      if (actualStart === -1) return null;
+      const actualEnd = actualStart + cleaned.length;
+
+      const wordRange = document.createRange();
+      wordRange.setStart(textNode, actualStart);
+      wordRange.setEnd(textNode, actualEnd);
+
+      const rect = wordRange.getBoundingClientRect();
+      if (!rect || (rect.width === 0 && rect.height === 0)) return null;
+
+      return {
+        word: cleaned,
+        rect: rect
+      };
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /**
+   * Clears any active hover trigger timer.
+   */
+  function cancelHoverTimer() {
+    if (hoverTimer) {
+      clearTimeout(hoverTimer);
+      hoverTimer = null;
+    }
+    pendingHoverWord = '';
+  }
 
   /**
    * Remove any active floating tooltip from DOM
@@ -100,6 +251,7 @@
       }
       activeTooltipHost = null;
     }
+    currentActiveWord = '';
     // Remove transient dismissal listeners
     document.removeEventListener('pointerdown', handlePointerDownOutside, true);
     document.removeEventListener('keydown', handleEscapeKey, true);
@@ -123,13 +275,15 @@
   function handleEscapeKey(event) {
     if (event.key === 'Escape') {
       removeTooltip();
+      cancelHoverTimer();
     }
   }
 
   /**
-   * Scroll handler to dismiss tooltip on significant page scroll
+   * Scroll handler to dismiss tooltip on significant page scroll and cancel pending hover
    */
   function handleScrollThreshold() {
+    cancelHoverTimer();
     if (!activeTooltipHost) return;
     const currentY = window.pageYOffset || document.documentElement.scrollTop || 0;
     const currentX = window.pageXOffset || document.documentElement.scrollLeft || 0;
@@ -150,7 +304,7 @@
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'en-US';
-      utterance.rate = 0.95;
+      utterance.rate = typeof currentSettings.speechRate === 'number' ? currentSettings.speechRate : 0.95;
 
       if (buttonElement) {
         buttonElement.classList.add('playing');
@@ -192,59 +346,142 @@
 
   /**
    * Main double-click event listener
+   * @param {MouseEvent} event
    */
   function handleDoubleClick(event) {
-    // 1. Guard: feature enabled?
     if (!isEnabled) return;
 
-    // 2. Ignore double clicks in password input fields
-    const target = event.target;
-    if (target && target.tagName === 'INPUT' && target.type === 'password') {
-      return;
-    }
+    const mode = currentSettings.triggerMode || 'dblclick';
+    if (mode !== 'dblclick' && mode !== 'both') return;
 
-    // 3. Extract and sanitize selected text
+    if (!isModifierKeyActive(event)) return;
+
+    if (isIgnoredElement(event.target)) return;
+
     const selection = window.getSelection();
     if (!selection || !selection.rangeCount) return;
 
     const rawSelected = selection.toString().trim();
     if (!rawSelected) return;
 
-    // Clean leading & trailing punctuation, quotes, symbols
     const cleaned = rawSelected
       .replace(/^[\s.,/#!$%\^&\*;:{}=\-_`~()'"\[\]<>?]+|[\s.,/#!$%\^&\*;:{}=\-_`~()'"\[\]<>?]+$/g, '')
       .trim();
 
-    // 4. Must contain at least one English letter and not exceed 3 words
     if (!/[a-zA-Z]/.test(cleaned)) return;
 
     const words = cleaned.split(/\s+/).filter(Boolean);
     if (words.length === 0 || words.length > 3) return;
 
-    // 5. Calculate selection bounding box
     const range = selection.getRangeAt(0);
     const rect = range.getBoundingClientRect();
     if (!rect || (rect.width === 0 && rect.height === 0)) return;
 
-    // 6. Dismiss any existing tooltip before opening new one
+    cancelHoverTimer();
     removeTooltip();
 
-    // 7. Store scroll coordinates for scroll dismissal
     scrollStartY = window.pageYOffset || document.documentElement.scrollTop || 0;
     scrollStartX = window.pageXOffset || document.documentElement.scrollLeft || 0;
 
-    // 8. Render floating tooltip container
     renderShadowTooltip(cleaned, rect);
   }
 
   /**
+   * Mousemove listener for debounced hover word detection
+   * @param {MouseEvent} event
+   */
+  function handleMouseMove(event) {
+    if (!isEnabled) {
+      cancelHoverTimer();
+      return;
+    }
+
+    const mode = currentSettings.triggerMode || 'dblclick';
+    if (mode !== 'hover' && mode !== 'both') {
+      cancelHoverTimer();
+      return;
+    }
+
+    // Do not interfere if user is hovering inside active tooltip
+    if (activeTooltipHost) {
+      const path = event.composedPath ? event.composedPath() : [];
+      if (path.includes(activeTooltipHost)) {
+        cancelHoverTimer();
+        return;
+      }
+    }
+
+    if (!isModifierKeyActive(event)) {
+      cancelHoverTimer();
+      return;
+    }
+
+    if (isIgnoredElement(event.target)) {
+      cancelHoverTimer();
+      return;
+    }
+
+    const found = getWordAtPoint(event.clientX, event.clientY);
+    if (!found) {
+      cancelHoverTimer();
+      return;
+    }
+
+    const wordLower = found.word.toLowerCase();
+
+    // Do not re-trigger for the same word while its tooltip is already open
+    if (activeTooltipHost && currentActiveWord === wordLower) {
+      cancelHoverTimer();
+      return;
+    }
+
+    // If still hovering over the pending word, leave existing timer running
+    if (pendingHoverWord === wordLower && hoverTimer) {
+      return;
+    }
+
+    // New word hovered: reset previous timer and schedule new one
+    cancelHoverTimer();
+    pendingHoverWord = wordLower;
+
+    const delay = typeof currentSettings.hoverDelay === 'number' && currentSettings.hoverDelay >= 200
+      ? currentSettings.hoverDelay
+      : 600;
+
+    hoverTimer = setTimeout(() => {
+      hoverTimer = null;
+      pendingHoverWord = '';
+
+      if (!isEnabled) return;
+      if (!isModifierKeyActive(event)) return;
+
+      removeTooltip();
+
+      scrollStartY = window.pageYOffset || document.documentElement.scrollTop || 0;
+      scrollStartX = window.pageXOffset || document.documentElement.scrollLeft || 0;
+
+      renderShadowTooltip(found.word, found.rect);
+    }, delay);
+  }
+
+  /**
+   * Window mouseleave listener
+   */
+  function handleMouseLeave() {
+    cancelHoverTimer();
+  }
+
+  /**
    * Render and position Shadow DOM Tooltip
+   * Reused by both double-click and hover modes without duplication.
    * @param {string} word
    * @param {DOMRect} selectionRect
    */
   function renderShadowTooltip(word, selectionRect) {
-    // Ensure font stylesheet is injected into head
     ensureLocalFontsInjected();
+
+    // Set active word
+    currentActiveWord = word.toLowerCase();
 
     // Create isolation host element
     const host = document.createElement('div');
@@ -260,10 +497,8 @@
       z-index: 2147483647 !important;
     `;
 
-    // Attach open shadow DOM
     const shadow = host.attachShadow({ mode: 'open' });
 
-    // Stylesheet inside Shadow DOM
     const style = document.createElement('style');
     style.textContent = `
       * {
@@ -485,11 +720,9 @@
       }
     `;
 
-    // Tooltip Card container
     const card = document.createElement('div');
     card.className = 'tooltip-card';
 
-    // Header HTML
     card.innerHTML = `
       <div class="tooltip-arrow"></div>
       <div class="card-header">
@@ -525,11 +758,9 @@
     shadow.appendChild(style);
     shadow.appendChild(card);
 
-    // Append to documentElement for absolute positioning independent of body styling
     document.documentElement.appendChild(host);
     activeTooltipHost = host;
 
-    // Attach event listeners for header buttons
     const btnSpeak = card.querySelector('.btn-speak');
     const btnCopy = card.querySelector('.btn-copy');
     const btnClose = card.querySelector('.close-btn');
@@ -544,10 +775,9 @@
       removeTooltip();
     });
 
-    // Initial position calculation
     positionTooltipCard(card, selectionRect);
 
-    // Request translation from background service worker
+    // Request translation from service worker
     chrome.runtime.sendMessage(
       {
         action: 'TRANSLATE_TEXT',
@@ -555,7 +785,6 @@
         isDoubleClick: true
       },
       (response) => {
-        // If tooltip was closed during fetch, do nothing
         if (!activeTooltipHost || activeTooltipHost !== host) return;
 
         const body = card.querySelector('.card-body');
@@ -565,7 +794,6 @@
           const data = response.data;
           const primaryBangla = data.primary || 'অনুবাদ পাওয়া যায়নি';
 
-          // Show offline badge if translated via offline dictionary
           if (data.source === 'offline') {
             const wordGroup = card.querySelector('.word-group');
             if (wordGroup && !wordGroup.querySelector('.offline-badge')) {
@@ -577,14 +805,12 @@
             }
           }
 
-          // Show copy button
           btnCopy.style.display = 'inline-flex';
           btnCopy.addEventListener('click', (e) => {
             e.stopPropagation();
             copyToClipboard(primaryBangla, btnCopy);
           });
 
-          // Build dictionary meanings HTML if present
           let dictHTML = '';
           if (Array.isArray(data.dictionary) && data.dictionary.length > 0) {
             dictHTML = data.dictionary
@@ -612,12 +838,10 @@
           `;
         }
 
-        // Re-adjust position after content update
         positionTooltipCard(card, selectionRect);
       }
     );
 
-    // Register dismissal listeners
     setTimeout(() => {
       document.addEventListener('pointerdown', handlePointerDownOutside, true);
       document.addEventListener('keydown', handleEscapeKey, true);
@@ -638,16 +862,13 @@
     const cardWidth = card.offsetWidth || 290;
     const cardHeight = card.offsetHeight || 110;
 
-    // Center tooltip horizontally with respect to selection
     const wordCenterX = selectionRect.left + scrollX + selectionRect.width / 2;
     let cardLeft = wordCenterX - cardWidth / 2;
 
-    // Constrain horizontally within viewport margins (min 10px padding)
     const minLeft = scrollX + 10;
     const maxLeft = scrollX + viewportWidth - cardWidth - 10;
     cardLeft = Math.max(minLeft, Math.min(cardLeft, maxLeft));
 
-    // Calculate position of the caret arrow inside the card
     const arrow = card.querySelector('.tooltip-arrow');
     const relativeArrowX = wordCenterX - cardLeft;
     const clampedArrowX = Math.max(16, Math.min(relativeArrowX, cardWidth - 16));
@@ -655,17 +876,14 @@
       arrow.style.left = `${clampedArrowX - 6}px`;
     }
 
-    // Determine vertical placement: above or below
     const spaceAbove = selectionRect.top;
     const margin = 10;
     let cardTop = 0;
 
     if (spaceAbove > cardHeight + margin + 10) {
-      // Position above word
       cardTop = selectionRect.top + scrollY - cardHeight - margin;
       card.setAttribute('data-placement', 'top');
     } else {
-      // Position below word
       cardTop = selectionRect.bottom + scrollY + margin;
       card.setAttribute('data-placement', 'bottom');
     }
@@ -690,6 +908,8 @@
       .replace(/'/g, '&#039;');
   }
 
-  // Register the document double-click listener
+  // Register document listeners
   document.addEventListener('dblclick', handleDoubleClick, true);
+  document.addEventListener('mousemove', handleMouseMove, { passive: true });
+  document.addEventListener('mouseleave', handleMouseLeave, { passive: true });
 })();

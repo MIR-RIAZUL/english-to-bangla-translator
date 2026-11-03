@@ -59,6 +59,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   /**
+   * Updates visibility of the hover delay slider based on the active trigger mode.
+   * @param {string} mode
+   */
+  function updateHoverDelayVisibility(mode) {
+    if (!hoverDelayRow) return;
+    const isHoverActive = mode === 'hover' || mode === 'both';
+    hoverDelayRow.style.opacity = isHoverActive ? '1' : '0.45';
+    hoverDelayRow.style.pointerEvents = isHoverActive ? 'auto' : 'none';
+  }
+
+  /**
    * Displays an animated save confirmation badge in the header.
    * @param {string} [message='Settings saved']
    */
@@ -176,6 +187,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Trigger Mode
     if (triggerModeSelect) {
       triggerModeSelect.value = settings.triggerMode || 'dblclick';
+      updateHoverDelayVisibility(settings.triggerMode || 'dblclick');
     }
 
     // Hover Delay
@@ -296,6 +308,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         const val = triggerModeSelect.value;
         currentSettings.triggerMode = val;
+        updateHoverDelayVisibility(val);
         await saveSettings({ triggerMode: val });
         showSaveConfirmation();
       } catch (err) {
