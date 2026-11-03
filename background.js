@@ -2,7 +2,8 @@
  * Background Service Worker
  * Handles translation API calls (bypassing webpage CORS/CSP restrictions),
  * in-memory and persistent caching, lemmatization, offline dictionary fallbacks,
- * official Google Cloud Translation API v2 integration, and persistence of recent lookups.
+ * official Google Cloud Translation API v2 integration, keyboard shortcuts (commands),
+ * and persistence of recent lookups.
  */
 
 try {
@@ -563,6 +564,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     })();
     return true;
+  }
+});
+
+/**
+ * Handles extension keyboard shortcuts configured in manifest.json.
+ */
+chrome.commands.onCommand.addListener(async (command) => {
+  try {
+    if (command === 'translate-selection') {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab && activeTab.id) {
+        chrome.tabs.sendMessage(activeTab.id, { action: 'TRANSLATE_SELECTION' }, () => {
+          if (chrome.runtime.lastError) {
+            // Suppress error if active tab is internal or lacks content script
+            console.debug('Active tab does not support TRANSLATE_SELECTION:', chrome.runtime.lastError.message);
+          }
+        });
+      }
+    } else if (command === 'toggle-extension') {
+      const { enabled = true } = await chrome.storage.local.get('enabled');
+      const newState = !enabled;
+      await chrome.storage.local.set({ enabled: newState });
+    }
+  } catch (err) {
+    console.error('Error handling extension command:', err);
   }
 });
 

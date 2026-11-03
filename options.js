@@ -1,7 +1,7 @@
 /**
  * Options Page Controller
  * Manages reading, displaying, modifying, testing API credentials,
- * and resetting extension settings.
+ * configuring keyboard shortcuts, and resetting extension settings.
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const hoverDelayValue = document.getElementById('hoverDelayValue');
   const hoverDelayRow = document.getElementById('hoverDelayRow');
   const modifierKeySelect = document.getElementById('modifierKey');
+  const openShortcutsBtn = document.getElementById('openShortcutsBtn');
 
   const providerOrderList = document.getElementById('providerOrderList');
   const apiKeyInput = document.getElementById('apiKey');
@@ -345,6 +346,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         showSaveConfirmation();
       } catch (err) {
         console.error('Save error:', err);
+      }
+    });
+  }
+
+  // Open Shortcuts Configuration
+  if (openShortcutsBtn) {
+    openShortcutsBtn.addEventListener('click', () => {
+      try {
+        chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+      } catch (err) {
+        console.error('Failed to open shortcuts settings:', err);
       }
     });
   }

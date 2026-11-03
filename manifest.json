@@ -39,6 +39,22 @@
     "page": "options.html",
     "open_in_tab": true
   },
+  "commands": {
+    "translate-selection": {
+      "suggested_key": {
+        "default": "Alt+T",
+        "mac": "Alt+T"
+      },
+      "description": "Translate the selected text on the active webpage"
+    },
+    "toggle-extension": {
+      "suggested_key": {
+        "default": "Alt+Shift+T",
+        "mac": "Alt+Shift+T"
+      },
+      "description": "Enable or disable extension translation"
+    }
+  },
   "web_accessible_resources": [
     {
       "resources": [

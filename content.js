@@ -1,6 +1,6 @@
 /**
  * Content Script
- * Listens for double-click and hover events according to user settings,
+ * Listens for double-click, hover, and keyboard shortcut (TRANSLATE_SELECTION) events,
  * extracts English words, renders an isolated Shadow DOM floating tooltip,
  * and manages pronunciation, clipboard copy, and dismissal events.
  */
@@ -345,6 +345,50 @@
   }
 
   /**
+   * Reads, validates, and translates the active webpage text selection.
+   * Reused by double-click and keyboard shortcuts (TRANSLATE_SELECTION).
+   * @returns {boolean} True if a valid selection was found and rendered.
+   */
+  function triggerSelectionTranslation() {
+    if (!isEnabled) return false;
+
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return false;
+
+    const rawSelected = selection.toString().trim();
+    if (!rawSelected) return false;
+
+    // Check if selection focus is within an ignored element
+    const anchorElem = selection.anchorNode
+      ? (selection.anchorNode.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode.parentElement)
+      : null;
+
+    if (anchorElem && isIgnoredElement(anchorElem)) return false;
+
+    const cleaned = rawSelected
+      .replace(/^[\s.,/#!$%\^&\*;:{}=\-_`~()'"\[\]<>?]+|[\s.,/#!$%\^&\*;:{}=\-_`~()'"\[\]<>?]+$/g, '')
+      .trim();
+
+    if (!/[a-zA-Z]/.test(cleaned)) return false;
+
+    const words = cleaned.split(/\s+/).filter(Boolean);
+    if (words.length === 0 || words.length > 3) return false;
+
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) return false;
+
+    cancelHoverTimer();
+    removeTooltip();
+
+    scrollStartY = window.pageYOffset || document.documentElement.scrollTop || 0;
+    scrollStartX = window.pageXOffset || document.documentElement.scrollLeft || 0;
+
+    renderShadowTooltip(cleaned, rect);
+    return true;
+  }
+
+  /**
    * Main double-click event listener
    * @param {MouseEvent} event
    */
@@ -358,32 +402,7 @@
 
     if (isIgnoredElement(event.target)) return;
 
-    const selection = window.getSelection();
-    if (!selection || !selection.rangeCount) return;
-
-    const rawSelected = selection.toString().trim();
-    if (!rawSelected) return;
-
-    const cleaned = rawSelected
-      .replace(/^[\s.,/#!$%\^&\*;:{}=\-_`~()'"\[\]<>?]+|[\s.,/#!$%\^&\*;:{}=\-_`~()'"\[\]<>?]+$/g, '')
-      .trim();
-
-    if (!/[a-zA-Z]/.test(cleaned)) return;
-
-    const words = cleaned.split(/\s+/).filter(Boolean);
-    if (words.length === 0 || words.length > 3) return;
-
-    const range = selection.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-    if (!rect || (rect.width === 0 && rect.height === 0)) return;
-
-    cancelHoverTimer();
-    removeTooltip();
-
-    scrollStartY = window.pageYOffset || document.documentElement.scrollTop || 0;
-    scrollStartX = window.pageXOffset || document.documentElement.scrollLeft || 0;
-
-    renderShadowTooltip(cleaned, rect);
+    triggerSelectionTranslation();
   }
 
   /**
@@ -473,7 +492,7 @@
 
   /**
    * Render and position Shadow DOM Tooltip
-   * Reused by both double-click and hover modes without duplication.
+   * Reused by double-click, hover, and shortcut triggers without duplication.
    * @param {string} word
    * @param {DOMRect} selectionRect
    */
@@ -907,6 +926,15 @@
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
   }
+
+  // Handle messages from background service worker (keyboard shortcuts)
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'TRANSLATE_SELECTION') {
+      const translated = triggerSelectionTranslation();
+      sendResponse({ success: translated });
+      return false;
+    }
+  });
 
   // Register document listeners
   document.addEventListener('dblclick', handleDoubleClick, true);
