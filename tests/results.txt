@@ -22,11 +22,11 @@
 
 --- Suite 3: Chunking & Boundary Splitting ---
   [PASS] 3.1: 4000-char multi-sentence text splits into multiple chunks (3 chunks)
-  [PASS] 3.2: No chunk exceeds GTX 1500 char limit (max: 1500)
-  [PASS] 3.3: No chunk exceeds MyMemory 450 char limit (max: 446)
+  [PASS] 3.2: No chunk exceeds GTX 1500 char limit (max: 1478)
+  [PASS] 3.3: No chunk exceeds MyMemory 450 char limit (max: 437)
   [PASS] 3.4: Joined chunks equal original text after reconstruction
-  [FAIL] 3.5: One huge sentence (>1500 chars) is split so no chunk exceeds 1500 limit -> Got chunk count: 1, max chunk length: 3199 (sentence was not split by splitAtSentenceBoundaries)
-  [FAIL] 3.6: One huge sentence (>450 chars) is split so no chunk exceeds 450 limit -> Got chunk count: 1, max chunk length: 3199 (sentence was not split by splitAtSentenceBoundaries)
+  [PASS] 3.5: One huge sentence (>1500 chars) is split so no chunk exceeds 1500 limit
+  [PASS] 3.6: One huge sentence (>450 chars) is split so no chunk exceeds 450 limit
 
 --- Suite 4: GTX Parser ---
   [PASS] 4.1: GTX sentence response joins 3 segments into full translation
@@ -67,13 +67,9 @@
   [PASS] 10.5: CSV rows use standard CRLF (\r\n) line separators
 
 =================================================================
-TEST SUMMARY: Total: 41 | Passed: 38 | Failed: 3
+TEST SUMMARY: Total: 41 | Passed: 40 | Failed: 1
 =================================================================
 
 FAILING CASES ANALYSIS:
-1. Test [3.5] "One huge sentence (>1500 chars) is split so no chunk exceeds 1500 limit"
-   Cause: Got chunk count: 1, max chunk length: 3199 (sentence was not split by splitAtSentenceBoundaries)
-2. Test [3.6] "One huge sentence (>450 chars) is split so no chunk exceeds 450 limit"
-   Cause: Got chunk count: 1, max chunk length: 3199 (sentence was not split by splitAtSentenceBoundaries)
-3. Test [6.2] "Settings merge ignores unknown/unrecognized keys not in DEFAULT_SETTINGS"
+1. Test [6.2] "Settings merge ignores unknown/unrecognized keys not in DEFAULT_SETTINGS"
    Cause: unknownKey in settings: true, maliciousPayload in settings: true

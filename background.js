@@ -171,20 +171,75 @@ async function fetchWithBackoff(url, options = {}, retries = 2, delay = 600) {
 
 /**
  * Splits text into chunks at sentence boundaries (. ! ? \n) without exceeding maxLen.
- * A single sentence that exceeds maxLen is included as its own oversized chunk.
+ * If a single sentence exceeds maxLen, it is split further in order of preference:
+ * 1) at the last comma/semicolon/colon before maxLen,
+ * 2) else at the last space before maxLen,
+ * 3) else a hard cut at maxLen.
+ * Never produces a chunk longer than maxLen and never drops characters.
  * @param {string} text
  * @param {number} maxLen
  * @returns {string[]}
  */
 function splitAtSentenceBoundaries(text, maxLen) {
+  if (!text || typeof text !== 'string') return [];
+  if (text.length <= maxLen) return [text.trim()];
+
   // Split on sentence-ending punctuation followed by whitespace, or newlines
   const sentencePattern = /(?<=[.!?\n])\s+/;
   const rawSentences = text.split(sentencePattern).filter(Boolean);
 
+  // Subdivide any individual sentence that exceeds maxLen
+  function splitOversized(str, limit) {
+    const parts = [];
+    let remaining = str;
+
+    while (remaining.length > limit) {
+      const window = remaining.slice(0, limit);
+
+      // 1) at the last comma/semicolon/colon before maxLen
+      const lastPunct = Math.max(
+        window.lastIndexOf(','),
+        window.lastIndexOf(';'),
+        window.lastIndexOf(':')
+      );
+
+      let cutIndex = -1;
+      if (lastPunct !== -1) {
+        cutIndex = lastPunct + 1;
+      } else {
+        // 2) else at the last space before maxLen
+        const lastSpace = window.lastIndexOf(' ');
+        if (lastSpace !== -1) {
+          cutIndex = lastSpace + 1;
+        } else {
+          // 3) else a hard cut at maxLen
+          cutIndex = limit;
+        }
+      }
+
+      parts.push(remaining.slice(0, cutIndex));
+      remaining = remaining.slice(cutIndex);
+    }
+
+    if (remaining.length > 0) {
+      parts.push(remaining);
+    }
+    return parts;
+  }
+
+  const sentences = [];
+  for (const raw of rawSentences) {
+    if (raw.length <= maxLen) {
+      sentences.push(raw);
+    } else {
+      sentences.push(...splitOversized(raw, maxLen));
+    }
+  }
+
   const chunks = [];
   let current = '';
 
-  for (const sentence of rawSentences) {
+  for (const sentence of sentences) {
     const candidate = current ? current + ' ' + sentence : sentence;
     if (candidate.length <= maxLen) {
       current = candidate;
@@ -192,7 +247,6 @@ function splitAtSentenceBoundaries(text, maxLen) {
       if (current) {
         chunks.push(current.trim());
       }
-      // If a single sentence exceeds limit, push it as its own chunk
       current = sentence;
     }
   }
