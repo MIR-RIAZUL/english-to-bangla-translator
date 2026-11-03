@@ -2,6 +2,7 @@
  * TTS (Text-to-Speech) Module
  * Provides cross-language speech synthesis with Bangla voice detection,
  * voice loading with timeout fallback, and a unified speak() interface.
+ * Optimized for both Google Chrome and Microsoft Edge (including Edge Natural voices).
  */
 
 /** @type {SpeechSynthesisVoice|null} Cached Bangla voice reference */
@@ -64,8 +65,10 @@ function loadVoices() {
 
 /**
  * Finds the best available Bangla voice.
- * Preference order: bn-BD (Bangladesh), then bn-IN (India), then any voice
- * whose lang starts with "bn".
+ * Preference order:
+ * 1. bn-BD (Bangladesh Bengali), prioritizing Natural/Online voices if present
+ * 2. bn-IN (Indian Bengali), prioritizing Natural/Online voices if present
+ * 3. Any voice whose lang starts with "bn"/"ben" or whose name contains "Bengali"/"Bangla".
  * @returns {Promise<SpeechSynthesisVoice|null>} The best Bangla voice, or null if none found.
  */
 async function findBanglaVoice() {
@@ -75,22 +78,25 @@ async function findBanglaVoice() {
     const voices = await loadVoices();
     if (!voices || voices.length === 0) return null;
 
-    // Prefer bn-BD (Bangladesh Bengali)
-    let voice = voices.find((v) => v.lang === 'bn-BD' || v.lang === 'bn_BD');
+    // 1. Prefer bn-BD (Bangladesh Bengali) - prioritize natural/online voices in Edge/Chrome
+    let voice = voices.find((v) => (v.lang === 'bn-BD' || v.lang === 'bn_BD') && /natural|online/i.test(v.name)) ||
+                voices.find((v) => v.lang === 'bn-BD' || v.lang === 'bn_BD');
     if (voice) {
       _cachedBanglaVoice = voice;
       return voice;
     }
 
-    // Next prefer bn-IN (Indian Bengali)
-    voice = voices.find((v) => v.lang === 'bn-IN' || v.lang === 'bn_IN');
+    // 2. Next prefer bn-IN (Indian Bengali) - prioritize natural/online voices in Edge/Chrome
+    voice = voices.find((v) => (v.lang === 'bn-IN' || v.lang === 'bn_IN') && /natural|online/i.test(v.name)) ||
+            voices.find((v) => v.lang === 'bn-IN' || v.lang === 'bn_IN');
     if (voice) {
       _cachedBanglaVoice = voice;
       return voice;
     }
 
-    // Fallback: any voice whose lang starts with "bn"
-    voice = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('bn'));
+    // 3. Fallback: any voice whose lang starts with "bn" or "ben" or name contains Bengali/Bangla
+    voice = voices.find((v) => (v.lang && (v.lang.toLowerCase().startsWith('bn') || v.lang.toLowerCase().startsWith('ben'))) ||
+                               (v.name && /bangla|bengali/i.test(v.name)));
     if (voice) {
       _cachedBanglaVoice = voice;
       return voice;
@@ -125,9 +131,12 @@ function speak(text, lang, rate, buttonElement) {
     if (targetLang.toLowerCase().startsWith('bn')) {
       if (!_cachedBanglaVoice && 'speechSynthesis' in window) {
         const voices = window.speechSynthesis.getVoices() || [];
-        _cachedBanglaVoice = voices.find((v) => v.lang === 'bn-BD' || v.lang === 'bn_BD') ||
+        _cachedBanglaVoice = voices.find((v) => (v.lang === 'bn-BD' || v.lang === 'bn_BD') && /natural|online/i.test(v.name)) ||
+                             voices.find((v) => v.lang === 'bn-BD' || v.lang === 'bn_BD') ||
+                             voices.find((v) => (v.lang === 'bn-IN' || v.lang === 'bn_IN') && /natural|online/i.test(v.name)) ||
                              voices.find((v) => v.lang === 'bn-IN' || v.lang === 'bn_IN') ||
-                             voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('bn')) ||
+                             voices.find((v) => (v.lang && (v.lang.toLowerCase().startsWith('bn') || v.lang.toLowerCase().startsWith('ben'))) ||
+                                                (v.name && /bangla|bengali/i.test(v.name))) ||
                              null;
       }
       if (_cachedBanglaVoice) {

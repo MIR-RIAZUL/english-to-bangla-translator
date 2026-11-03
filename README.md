@@ -1,6 +1,6 @@
-# English-to-Bangla Hover & Click Translator (Chrome Extension - Manifest V3)
+# English-to-Bangla Hover & Click Translator (Chrome & Microsoft Edge Extension)
 
-A high-performance, privacy-first Google Chrome extension that provides instant English-to-Bangla (Bengali) translations whenever you double-click or hover over any word on any webpage.
+A high-performance, privacy-first browser extension for **Google Chrome** and **Microsoft Edge** that provides instant English-to-Bangla (Bengali) translations whenever you double-click or hover over any word on any webpage.
 
 Built exclusively with **vanilla JavaScript**, native Web APIs, and local assets—no external frameworks, no build steps, and zero third-party tracking.
 
@@ -8,6 +8,9 @@ Built exclusively with **vanilla JavaScript**, native Web APIs, and local assets
 
 ## ✨ Features
 
+- **Cross-Browser Native Support (Chrome & Edge)**:
+  - 100% Manifest V3 compliant across both **Google Chrome** (v105+) and **Microsoft Edge** (v105+).
+  - Native integration with browser extension settings and keyboard shortcut managers (`chrome://extensions/shortcuts` and `edge://extensions/shortcuts`).
 - **Double-Click & Hover Translation**:
   - Double-click any English word on any webpage to see its Bangla meaning in an isolated, floating tooltip.
   - Optional mouse hover mode with configurable pause delay (200ms – 2000ms) and optional modifier key gating (`Alt`, `Ctrl`, `Shift`, or `None`).
@@ -21,7 +24,7 @@ Built exclusively with **vanilla JavaScript**, native Web APIs, and local assets
 - **Dual-Language Text-to-Speech (TTS)**:
   - English speech button (`🔊`) to hear native English pronunciation.
   - Bangla speech button (`🔊`) to listen to authentic Bengali pronunciation.
-  - Smart Bangla voice detection prioritizing `bn-BD` (Bangladesh) followed by `bn-IN` (India).
+  - Smart Bangla voice detection prioritizing `bn-BD` (Bangladesh) followed by `bn-IN` (India), with dedicated support for Microsoft Edge Natural Voices (`Microsoft Bashkar Online (Natural)` / `Microsoft Nabanita Online (Natural)`).
   - Graceful fallback with an informative notice if no Bangla voice is installed on the host operating system.
   - Synchronized speech rate adjustment (`speechRate`) for both languages.
 - **Accessible & Motion-Sensitive Tooltip**:
@@ -74,19 +77,31 @@ Built exclusively with **vanilla JavaScript**, native Web APIs, and local assets
 | `Alt+Shift+T` | `toggle-extension` | Globally toggles the translation functionality on or off. |
 
 > [!TIP]
-> You can customize these shortcuts anytime by visiting `chrome://extensions/shortcuts` or by clicking **Configure Shortcuts** inside the extension Options page.
+> You can customize these shortcuts anytime by clicking **Configure Shortcuts** inside the Options page, which automatically opens your browser's native shortcut editor:
+> - **Google Chrome**: `chrome://extensions/shortcuts`
+> - **Microsoft Edge**: `edge://extensions/shortcuts`
 
 ---
 
-## 🚀 Installation & Chrome Setup Guide
+## 🚀 Installation & Browser Setup
 
-1. Open **Google Chrome** on your computer.
+### Google Chrome
+1. Open **Google Chrome**.
 2. Navigate to `chrome://extensions/` in the address bar.
 3. Enable **Developer mode** using the toggle in the top-right corner.
 4. Click the **Load unpacked** button in the top-left corner.
 5. Select the extension directory:
    `d:\antigravity_project\chrome extension\mosuehoberTransalation`
-6. Pin the extension icon to your Chrome toolbar for quick access.
+6. Pin the extension icon to your Chrome toolbar.
+
+### Microsoft Edge
+1. Open **Microsoft Edge**.
+2. Navigate to `edge://extensions/` in the address bar.
+3. Enable **Developer mode** using the toggle in the left sidebar (or bottom-left corner).
+4. Click the **Load unpacked** button at the top of the page.
+5. Select the same extension directory:
+   `d:\antigravity_project\chrome extension\mosuehoberTransalation`
+6. Click the extension puzzle icon on the Edge toolbar and click the eye icon to keep it visible.
 
 ---
 
@@ -121,12 +136,12 @@ While the extension works out of the box with the default Google GTX web engine 
 4. Go to **APIs & Services** → **Credentials**, click **Create Credentials**, and select **API key**.
 5. (Recommended) Under **API restrictions**, restrict the key to the **Cloud Translation API**.
 6. Copy the generated API key (starts with `AIzaSy...`).
-7. Open the extension **Options** page (`chrome-extension://<id>/options.html`).
+7. Open the extension **Options** page.
 8. Paste the key into the **Google Cloud API Key** input field.
 9. Click **Test Key** to verify connectivity. You will see a green confirmation badge when the key is validated.
 
 > [!NOTE]
-> Your API key is stored strictly on your local computer in `chrome.storage.local`. It is never transmitted to external servers other than official Google API endpoints (`https://translation.googleapis.com/*`), never synced via Chrome Sync, and never logged in the console.
+> Your API key is stored strictly on your local computer in `chrome.storage.local`. It is never transmitted to external servers other than official Google API endpoints (`https://translation.googleapis.com/*`), never synced via browser cloud sync, and never logged in the console.
 
 ---
 
@@ -158,8 +173,8 @@ The starter offline dictionary located at [`data/dictionary.json`](data/dictiona
 
 ```text
 mosuehoberTransalation/
-├── manifest.json       # Chrome Manifest V3 configuration (v2.0.0) with commands & fonts
-├── tts.js              # Speech synthesis module with Bangla voice detection (bn-BD / bn-IN)
+├── manifest.json       # Manifest V3 configuration (v2.0.0) for Chrome & Edge
+├── tts.js              # Speech synthesis module with Bangla voice detection (Chrome & Edge Natural voices)
 ├── settings.js         # Shared settings helper & default configuration
 ├── lemmatize.js        # Morphological root extractor (-ing, -ed, plurals, doubled consonants)
 ├── background.js       # Service worker (caching, official API, offline fallback, commands listener)
@@ -172,7 +187,7 @@ mosuehoberTransalation/
 ├── history.js          # History live search, multi-field filtering, sorting, CSV/JSON export & speech
 ├── options.html        # Full settings & preferences page with API key tester & shortcuts launcher
 ├── options.css         # Styling for options page with local font declarations
-├── options.js          # Options controller with automatic saving & key tester
+├── options.js          # Options controller with automatic saving & Chrome/Edge shortcuts detection
 ├── data/
 │   └── dictionary.json # Bundled starter offline dictionary (~300+ entries, CC0)
 ├── fonts/              # Bundled local WOFF2 font files
@@ -185,13 +200,14 @@ mosuehoberTransalation/
 │   ├── icon-48.png     # 48x48px icon
 │   └── icon-128.png    # 128x128px icon
 ├── CHANGELOG.md        # Comprehensive v2.0.0 release changelog
-└── README.md           # Documentation, licensing & installation guide
+└── README.md           # Documentation, licensing & Chrome/Edge installation guide
 ```
 
 ---
 
 ## 🏗️ Architecture & Technical Highlights
 
+- **Universal Chromium Compatibility**: Works without code changes across Google Chrome, Microsoft Edge, Brave, Opera, and Vivaldi.
 - **Pure Vanilla JavaScript**: Zero external npm dependencies, zero build steps, and zero transpilation overhead.
 - **Isolated Shadow DOM**: The floating tooltip uses `attachShadow({ mode: 'open' })` with an explicit reset (`all: initial !important`) and `z-index: 2147483647`, ensuring that host page stylesheets never interfere with the translation popup.
 - **CSS Custom Highlight API**: Word highlighting uses `CSS.highlights` and `::highlight(eng-bn-word-highlight)` for clean, non-destructive highlighting without modifying the host page DOM.

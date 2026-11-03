@@ -2,6 +2,7 @@
  * Options Page Controller
  * Manages reading, displaying, modifying, testing API credentials,
  * configuring keyboard shortcuts, and resetting extension settings.
+ * Fully compatible with both Google Chrome and Microsoft Edge.
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -350,11 +351,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Open Shortcuts Configuration
+  // Open Shortcuts Configuration (Chrome & Edge dual-support)
   if (openShortcutsBtn) {
     openShortcutsBtn.addEventListener('click', () => {
       try {
-        chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+        const isEdge = typeof navigator !== 'undefined' && /Edg\//i.test(navigator.userAgent);
+        const shortcutsUrl = isEdge ? 'edge://extensions/shortcuts' : 'chrome://extensions/shortcuts';
+        chrome.tabs.create({ url: shortcutsUrl }, () => {
+          if (chrome.runtime.lastError) {
+            const fallbackUrl = isEdge ? 'edge://extensions' : 'chrome://extensions';
+            chrome.tabs.create({ url: fallbackUrl });
+          }
+        });
       } catch (err) {
         console.error('Failed to open shortcuts settings:', err);
       }
