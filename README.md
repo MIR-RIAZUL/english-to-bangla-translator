@@ -9,13 +9,20 @@ A high-performance, production-ready Google Chrome extension that provides insta
 - **Double-Click Instant Translation**: Double-click any English word on any webpage to see its Bangla meaning in a floating, non-intrusive tooltip.
 - **Shadow DOM Style Isolation**: The floating tooltip is encapsulated within a Shadow DOM container with `z-index: 2147483647`, ensuring host webpage styles never break the translation UI.
 - **100% Offline Bundled Fonts**: Bundled `Inter` and `Hind Siliguri` (400, 600) WOFF2 fonts with robust system-font fallbacks (`Segoe UI`, `Arial`, `Noto Sans Bengali`, `sans-serif`) and zero external Google Font CDN dependencies.
+- **Offline Starter Dictionary & Lemmatization**:
+  - Bundled local dictionary (`data/dictionary.json`) covering ~300+ common English words with parts of speech and Bangla definitions.
+  - Smart morphological lemmatizer (`lemmatize.js`) supporting suffixes (`-ing`, `-ed`, `-s`, `-es`, `-ies` → `y`, `-ied` → `y`) and doubled consonants (e.g., `running` → `run`).
+  - Automatic fallback to offline dictionary when network connectivity is lost (`navigator.onLine === false`) or online endpoints fail.
+  - Visual **offline** badge indicator on tooltips and popup results when served from the offline dictionary.
+- **Two-Tier Caching Architecture**:
+  - **Memory Cache**: High-speed LRU-capped in-memory map (300 entries).
+  - **Persistent Cache**: `chrome.storage.local` store under key `tcache` (up to 1,000 entries with automatic oldest-entry eviction).
 - **Audio Pronunciation**: High-clarity native speech pronunciation using the Web Speech API (`window.speechSynthesis`).
 - **Comprehensive Meanings & Parts of Speech**: Displays primary Bengali translation plus part-of-speech breakdowns (nouns, verbs, adjectives, etc.) and alternative synonyms.
 - **CORS-Free Architecture**: Translation requests execute inside the Background Service Worker (`background.js`) to bypass page-level Content Security Policies (CSP) and CORS restrictions.
-- **Dual API Fallback Engine**:
+- **Dual Online API Fallback Engine**:
   - **Primary**: Google Translate GTX (fast, free, rich dictionary breakdowns).
   - **Fallback**: MyMemory Translation API.
-- **In-Memory Caching**: Recently translated words resolve instantaneously without redundant network requests.
 - **Toolbar Control Panel (Popup UI)**:
   - Master **Enable / Disable Toggle Switch** (synced across tabs in real-time).
   - **Quick Translate Box** for translating typed or pasted words/sentences.
@@ -31,11 +38,19 @@ A high-performance, production-ready Google Chrome extension that provides insta
 
 ---
 
+## 📚 Offline Dictionary Source & Licensing
+
+The starter dictionary file located at [`data/dictionary.json`](data/dictionary.json) contains a curated list of foundational English vocabulary terms mapped to parts of speech and Bengali definitions.
+- **Source**: Curated from public-domain word frequency corpora and standardized English-Bengali bilingual lexical lists.
+- **License**: Released under the [Creative Commons Zero (CC0 1.0 Universal) Public Domain Dedication](https://creativecommons.org/publicdomain/zero/1.0/). Free to use, adapt, and expand without restriction.
+
+---
+
 ## 🔒 Permissions & Resources Explanation
 
 The extension requests only minimal permissions necessary for its core operation:
 
-- `storage`: Required to save user preferences (`settings` object), toggle status (`enabled`), and persistent lookup history (`recentWords`) across browser sessions using `chrome.storage.local`.
+- `storage`: Required to save user preferences (`settings` object), toggle status (`enabled`), persistent lookup history (`recentWords`), and persistent translation cache (`tcache`) across browser sessions using `chrome.storage.local`.
 - `activeTab`: Required to interact with the current webpage context when triggered and open extension options cleanly.
 - `web_accessible_resources (fonts/*)`: Required to permit web pages to load bundled local extension fonts (`inter-*.woff2`, `hind-siliguri-*.woff2`) declared via injected `@font-face` rules.
 - `https://translate.googleapis.com/*`: Required to fetch fast translations and comprehensive parts of speech from Google GTX endpoints.
@@ -49,14 +64,17 @@ The extension requests only minimal permissions necessary for its core operation
 mosuehoberTransalation/
 ├── manifest.json       # Chrome Manifest V3 configuration (v2.0.0)
 ├── settings.js         # Shared settings helper & default configuration
-├── background.js       # Background service worker (API requests, caching, migration)
-├── content.js          # DOM double-click listener & Shadow DOM tooltip
+├── lemmatize.js        # Morphological root extractor (-ing, -ed, plurals, doubled consonants)
+├── background.js       # Background service worker (caching, offline fallback, CORS bypass)
+├── content.js          # DOM double-click listener, Shadow DOM tooltip & offline badge
 ├── popup.html          # Toolbar extension control panel with settings button
 ├── popup.css           # Modern 320px styling with local font declarations
 ├── popup.js            # Toolbar logic, toggle state, quick translator & recent words
 ├── options.html        # Full settings & preferences page
 ├── options.css         # Styling for options page with local font declarations
 ├── options.js          # Options controller with automatic saving & reset
+├── data/
+│   └── dictionary.json # Bundled starter offline dictionary (~300+ entries, CC0)
 ├── fonts/              # Bundled local WOFF2 font files
 │   ├── inter-400.woff2
 │   ├── inter-600.woff2
@@ -66,7 +84,7 @@ mosuehoberTransalation/
 │   ├── icon-16.png     # 16x16px icon
 │   ├── icon-48.png     # 48x48px icon
 │   └── icon-128.png    # 128x128px icon
-└── README.md           # Documentation, permission explanations & installation guide
+└── README.md           # Documentation, licensing & installation guide
 ```
 
 ---
@@ -88,6 +106,7 @@ mosuehoberTransalation/
 1. **On Any Webpage**:
    - Double-click any English word (e.g. *knowledge*, *beautiful*, *freedom*).
    - A sleek floating tooltip appears right above (or below) the word with its Bangla meaning and pronunciation button.
+   - If offline or disconnected from the internet, the translation is retrieved instantly from the local dictionary and displays a yellow **OFFLINE** badge.
    - Click outside, scroll, or press `Escape` to dismiss the tooltip.
 
 2. **From the Extension Toolbar**:

@@ -1,21 +1,25 @@
 /**
  * Background Service Worker
  * Handles translation API calls (bypassing webpage CORS/CSP restrictions),
- * in-memory caching, fallback provider, and persistence of recent lookups.
+ * in-memory and persistent caching, lemmatization, offline dictionary fallbacks,
+ * and persistence of recent lookups.
  */
 
 try {
-  importScripts('settings.js');
+  importScripts('settings.js', 'lemmatize.js');
 } catch (e) {
-  console.warn('Failed to load settings.js in Service Worker:', e);
+  console.warn('Failed to load dependency scripts in Service Worker:', e);
 }
 
 // In-memory cache for fast repeated lookups (LRU-like cap)
 const translationCache = new Map();
 const MAX_CACHE_ENTRIES = 300;
 
+// Cached offline dictionary in memory
+let offlineDict = null;
+
 /**
- * Retrieve cached translation if present
+ * Retrieve cached translation if present in memory.
  * @param {string} text
  * @returns {object|null}
  */
@@ -25,7 +29,7 @@ function getCachedTranslation(text) {
 }
 
 /**
- * Store translation in the in-memory cache
+ * Store translation in the in-memory cache.
  * @param {string} text
  * @param {object} data
  */
@@ -36,6 +40,128 @@ function setCachedTranslation(text, data) {
     translationCache.delete(oldestKey);
   }
   translationCache.set(key, data);
+}
+
+/**
+ * Retrieves cached translation from persistent storage (chrome.storage.local key 'tcache').
+ * @param {string} text
+ * @returns {Promise<object|null>}
+ */
+async function getPersistentCachedTranslation(text) {
+  try {
+    const key = text.trim().toLowerCase();
+    const { tcache = {} } = await chrome.storage.local.get('tcache');
+    if (tcache && tcache[key] && tcache[key].data) {
+      return tcache[key].data;
+    }
+    return null;
+  } catch (err) {
+    console.warn('Persistent cache read error:', err);
+    return null;
+  }
+}
+
+/**
+ * Stores translation in persistent storage (max 1000 entries, evicts oldest).
+ * @param {string} text
+ * @param {object} data
+ */
+async function setPersistentCachedTranslation(text, data) {
+  try {
+    const key = text.trim().toLowerCase();
+    const { tcache = {} } = await chrome.storage.local.get('tcache');
+
+    tcache[key] = {
+      data: data,
+      timestamp: Date.now()
+    };
+
+    const keys = Object.keys(tcache);
+    if (keys.length > 1000) {
+      keys.sort((a, b) => (tcache[a].timestamp || 0) - (tcache[b].timestamp || 0));
+      const excess = keys.length - 1000;
+      for (let i = 0; i < excess; i++) {
+        delete tcache[keys[i]];
+      }
+    }
+
+    await chrome.storage.local.set({ tcache });
+  } catch (err) {
+    console.warn('Persistent cache write error:', err);
+  }
+}
+
+/**
+ * Lazily loads and parses data/dictionary.json into memory.
+ * @returns {Promise<object|null>}
+ */
+async function getOfflineDictionary() {
+  if (offlineDict) return offlineDict;
+  try {
+    const url = chrome.runtime.getURL('data/dictionary.json');
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to load dictionary.json: HTTP ${response.status}`);
+    }
+    offlineDict = await response.json();
+    return offlineDict;
+  } catch (err) {
+    console.error('Offline dictionary load error:', err);
+    return null;
+  }
+}
+
+/**
+ * Looks up a word or short phrase in the offline dictionary with lemmatization fallbacks.
+ * @param {string} text
+ * @returns {Promise<object|null>}
+ */
+async function lookupOfflineDictionary(text) {
+  try {
+    const dict = await getOfflineDictionary();
+    if (!dict) return null;
+
+    const candidates = typeof lemmatize === 'function'
+      ? lemmatize(text)
+      : [text.toLowerCase().trim()];
+
+    let match = null;
+    let matchedWord = '';
+
+    for (const candidate of candidates) {
+      if (dict[candidate]) {
+        match = dict[candidate];
+        matchedWord = candidate;
+        break;
+      }
+    }
+
+    if (!match) return null;
+
+    const primary = Array.isArray(match.bn) && match.bn.length > 0 ? match.bn[0] : '';
+    if (!primary) return null;
+
+    const dictionary = [];
+    if (Array.isArray(match.pos) && Array.isArray(match.bn) && match.bn.length > 0) {
+      dictionary.push({
+        pos: match.pos.join(', '),
+        terms: match.bn.slice(0, 5)
+      });
+    }
+
+    return {
+      originalText: text,
+      primary: primary,
+      dictionary: dictionary,
+      sourceLang: 'en',
+      provider: 'offline',
+      source: 'offline',
+      matchedWord: matchedWord
+    };
+  } catch (err) {
+    console.error('Offline lookup error:', err);
+    return null;
+  }
 }
 
 /**
@@ -132,7 +258,8 @@ async function translateWithGoogle(text) {
     primary: primary,
     dictionary: dictionary,
     sourceLang: data[2] || 'en',
-    provider: 'google'
+    provider: 'google',
+    source: 'online'
   };
 }
 
@@ -184,12 +311,18 @@ async function translateWithMyMemory(text) {
     primary: primary,
     dictionary: alternatives,
     sourceLang: 'en',
-    provider: 'mymemory'
+    provider: 'mymemory',
+    source: 'online'
   };
 }
 
 /**
- * Unified Translation Handler with Caching & Fallback
+ * Unified Translation Handler with Lookup Order:
+ * 1. Memory cache
+ * 2. Persistent storage cache ('tcache', max 1000)
+ * 3. Online API (if navigator.onLine)
+ * 4. Offline dictionary (fallback or immediate if offline)
+ *
  * @param {string} text
  * @param {boolean} isDoubleClick
  * @returns {Promise<object>}
@@ -201,40 +334,76 @@ async function handleTranslation(text, isDoubleClick = false) {
   }
 
   // 1. Check in-memory cache
-  const cached = getCachedTranslation(trimmed);
-  if (cached) {
+  const memCached = getCachedTranslation(trimmed);
+  if (memCached) {
     if (isDoubleClick) {
-      await saveRecentWord(trimmed, cached.primary);
+      await saveRecentWord(trimmed, memCached.primary);
     }
-    return { ...cached, fromCache: true };
+    return { ...memCached, source: 'cache', fromCache: true };
   }
 
-  let result = null;
+  // 2. Check persistent cache (chrome.storage.local key 'tcache')
+  const persistentCached = await getPersistentCachedTranslation(trimmed);
+  if (persistentCached) {
+    setCachedTranslation(trimmed, persistentCached);
+    if (isDoubleClick) {
+      await saveRecentWord(trimmed, persistentCached.primary);
+    }
+    return { ...persistentCached, source: 'cache', fromCache: true };
+  }
 
-  // 2. Try Primary Google API
+  // Check network connectivity
+  const isOnline = typeof navigator !== 'undefined' ? navigator.onLine !== false : true;
+
+  // 3. If offline, skip straight to offline dictionary
+  if (!isOnline) {
+    const offlineResult = await lookupOfflineDictionary(trimmed);
+    if (offlineResult) {
+      setCachedTranslation(trimmed, offlineResult);
+      if (isDoubleClick) {
+        await saveRecentWord(trimmed, offlineResult.primary);
+      }
+      return offlineResult;
+    }
+    throw new Error('অফলাইন ডিকশনারিতে শব্দটি পাওয়া যায়নি এবং ইন্টারনেট সংযোগ নেই।');
+  }
+
+  // 4. Online API execution (Google GTX -> MyMemory)
+  let result = null;
   try {
     result = await translateWithGoogle(trimmed);
   } catch (primaryError) {
     console.warn('Primary translation API failed, attempting fallback:', primaryError);
-
-    // 3. Fallback to MyMemory
     try {
       result = await translateWithMyMemory(trimmed);
     } catch (fallbackError) {
-      console.error('All translation providers failed:', fallbackError);
-      throw new Error('অনুবাদ পাওয়া যায়নি। অনুগ্রহ করে আপনার ইন্টারনেট সংযোগ পরীক্ষা করুন।');
+      console.warn('Online translation providers failed, attempting offline dictionary:', fallbackError);
     }
   }
 
-  // Store in cache
-  setCachedTranslation(trimmed, result);
+  // 5. If online succeeded, persist and return
+  if (result) {
+    result.source = 'online';
+    setCachedTranslation(trimmed, result);
+    await setPersistentCachedTranslation(trimmed, result);
 
-  // Save to recent words if double-clicked
-  if (isDoubleClick) {
-    await saveRecentWord(trimmed, result.primary);
+    if (isDoubleClick) {
+      await saveRecentWord(trimmed, result.primary);
+    }
+    return result;
   }
 
-  return result;
+  // 6. Online failed: fallback to offline dictionary
+  const offlineFallback = await lookupOfflineDictionary(trimmed);
+  if (offlineFallback) {
+    setCachedTranslation(trimmed, offlineFallback);
+    if (isDoubleClick) {
+      await saveRecentWord(trimmed, offlineFallback.primary);
+    }
+    return offlineFallback;
+  }
+
+  throw new Error('অনুবাদ পাওয়া যায়নি। অনুগ্রহ করে আপনার ইন্টারনেট সংযোগ পরীক্ষা করুন।');
 }
 
 // Runtime message listener
@@ -267,7 +436,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Extension installation initialization and migration
 chrome.runtime.onInstalled.addListener(async () => {
   try {
-    const data = await chrome.storage.local.get(['enabled', 'recentWords', 'settings']);
+    const data = await chrome.storage.local.get(['enabled', 'recentWords', 'settings', 'tcache']);
 
     // Preserve existing enabled state or set default
     if (data.enabled === undefined) {
@@ -279,26 +448,15 @@ chrome.runtime.onInstalled.addListener(async () => {
       await chrome.storage.local.set({ recentWords: [] });
     }
 
+    // Preserve existing tcache or initialize empty object
+    if (!data.tcache || typeof data.tcache !== 'object') {
+      await chrome.storage.local.set({ tcache: {} });
+    }
+
     // Migration / initialization for settings
-    // getSettings() safely merges any existing data.settings with DEFAULT_SETTINGS
     if (typeof getSettings === 'function') {
       const initializedSettings = await getSettings();
       await chrome.storage.local.set({ settings: initializedSettings });
-    } else {
-      const fallbackSettings = {
-        triggerMode: 'dblclick',
-        hoverDelay: 600,
-        modifierKey: 'none',
-        speechRate: 0.95,
-        apiKey: '',
-        providerOrder: ['official', 'gtx', 'mymemory', 'offline'],
-        historyLimit: 200,
-        highlightColor: '#fde68a',
-        theme: 'dark',
-        offlineEnabled: true,
-        ...(data.settings || {})
-      };
-      await chrome.storage.local.set({ settings: fallbackSettings });
     }
   } catch (error) {
     console.error('Initialization and migration error in onInstalled:', error);

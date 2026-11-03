@@ -346,7 +346,23 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        max-width: 170px;
+        max-width: 140px;
+      }
+
+      .offline-badge {
+        display: inline-flex;
+        align-items: center;
+        font-size: 9.5px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        background: rgba(245, 158, 11, 0.18);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        border-radius: 4px;
+        padding: 1px 5px;
+        line-height: 1.2;
+        flex-shrink: 0;
       }
 
       .header-actions {
@@ -548,6 +564,18 @@
         if (response && response.success && response.data) {
           const data = response.data;
           const primaryBangla = data.primary || 'অনুবাদ পাওয়া যায়নি';
+
+          // Show offline badge if translated via offline dictionary
+          if (data.source === 'offline') {
+            const wordGroup = card.querySelector('.word-group');
+            if (wordGroup && !wordGroup.querySelector('.offline-badge')) {
+              const badge = document.createElement('span');
+              badge.className = 'offline-badge';
+              badge.textContent = 'offline';
+              badge.title = 'অফলাইন ডিকশনারি';
+              wordGroup.appendChild(badge);
+            }
+          }
 
           // Show copy button
           btnCopy.style.display = 'inline-flex';

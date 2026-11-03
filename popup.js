@@ -21,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const primaryResult = document.getElementById('primaryResult');
   const dictMeanings = document.getElementById('dictMeanings');
   const copyResultBtn = document.getElementById('copyResultBtn');
+  const popupOfflineBadge = document.getElementById('popupOfflineBadge');
 
   const recentList = document.getElementById('recentList');
   const clearRecentBtn = document.getElementById('clearRecentBtn');
@@ -121,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
     quickInput.value = '';
     updateInputControls();
     resultBox.style.display = 'none';
+    if (popupOfflineBadge) popupOfflineBadge.style.display = 'none';
     quickInput.focus();
   });
 
@@ -141,6 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Show loading state
     resultBox.style.display = 'block';
+    if (popupOfflineBadge) popupOfflineBadge.style.display = 'none';
     primaryResult.innerHTML = '<span class="loading-text">অনুবাদ করা হচ্ছে...</span>';
     dictMeanings.innerHTML = '';
     translateBtn.disabled = true;
@@ -159,6 +162,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = response.data;
             currentTranslatedText = data.primary || '';
             primaryResult.textContent = currentTranslatedText;
+
+            // Show or hide offline badge
+            if (popupOfflineBadge) {
+              popupOfflineBadge.style.display = data.source === 'offline' ? 'inline-flex' : 'none';
+            }
 
             // Render dictionary meanings if available
             if (Array.isArray(data.dictionary) && data.dictionary.length > 0) {
@@ -181,12 +189,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const errorMsg = response?.error || 'অনুবাদ সম্পন্ন করা যায়নি।';
             primaryResult.innerHTML = `<span style="color: #f87171; font-size: 13px;">${escapeHtml(errorMsg)}</span>`;
             dictMeanings.innerHTML = '';
+            if (popupOfflineBadge) popupOfflineBadge.style.display = 'none';
           }
         }
       );
     } catch (err) {
       translateBtn.disabled = false;
       primaryResult.innerHTML = `<span style="color: #f87171; font-size: 13px;">অনুবাদ ত্রুটি: ${escapeHtml(err.message)}</span>`;
+      if (popupOfflineBadge) popupOfflineBadge.style.display = 'none';
     }
   }
 
