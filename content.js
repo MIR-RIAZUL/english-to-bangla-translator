@@ -1,15 +1,17 @@
 /**
  * Content Script
- * Listens for double-click, hover, and keyboard shortcut (TRANSLATE_SELECTION) events,
- * extracts English words, renders an isolated accessible Shadow DOM floating tooltip,
- * provides dual-language text-to-speech, clipboard copy, theme support (dark/light/auto),
- * and highlights words using the CSS Custom Highlight API.
+ * Listens for double-click, hover, triple-click, mouse selection with floating "অ" action,
+ * and keyboard shortcut (TRANSLATE_SELECTION) events.
+ * Extracts English words and sentences, renders an isolated accessible Shadow DOM floating tooltip,
+ * supports queued dual-language text-to-speech, clipboard copying, theme adaptability (dark/light/auto),
+ * collapsible original view, loading skeletons, and word highlighting via CSS Custom Highlight API.
  */
 
 (() => {
   // Global state for enabling/disabling translation
   let isEnabled = true;
   let activeTooltipHost = null;
+  let activeFloatingHost = null;
   let currentActiveWord = '';
   let scrollStartY = 0;
   let scrollStartX = 0;
@@ -20,6 +22,11 @@
 
   // Bangla voice availability (resolved once on page load and verified dynamically)
   let banglaVoiceAvailable = false;
+
+  // Speech queue state
+  let isSpeakingQueue = false;
+  let currentUtteranceQueue = [];
+  let activeSpeakingButton = null;
 
   // Settings state with safe defaults
   let currentSettings = {
@@ -192,6 +199,7 @@
         isEnabled = changes.enabled.newValue !== false;
         if (!isEnabled) {
           removeTooltip();
+          hideFloatingButton();
           cancelHoverTimer();
         }
       }
@@ -249,6 +257,21 @@
     }
 
     return false;
+  }
+
+  /**
+   * Validates that text contains English characters and at least 40% are English letters.
+   * Rejects empty or non-English selections silently.
+   * @param {string} text
+   * @returns {boolean}
+   */
+  function isValidEnglishText(text) {
+    if (!text || typeof text !== 'string') return false;
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return false;
+    const letters = trimmed.match(/[a-zA-Z]/g);
+    if (!letters || letters.length === 0) return false;
+    return (letters.length / trimmed.length) >= 0.4;
   }
 
   /**
@@ -343,9 +366,225 @@
   }
 
   /**
-   * Remove any active floating tooltip from DOM and clear word highlights.
+   * Stops any active speech synthesis and resets playing indicators.
+   */
+  function stopSpeech() {
+    isSpeakingQueue = false;
+    currentUtteranceQueue = [];
+    if ('speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (e) {}
+    }
+    if (activeSpeakingButton) {
+      activeSpeakingButton.classList.remove('playing');
+      activeSpeakingButton = null;
+    }
+  }
+
+  /**
+   * Speaks long text by splitting it into sentences and feeding them sequentially through a queue,
+   * preventing browser speech timeout bugs (~15 seconds on Chromium).
+   * @param {string} text - Full text to speak.
+   * @param {string} lang - Language code (e.g. 'en-US', 'bn-BD').
+   * @param {number} rate - Speech playback rate.
+   * @param {HTMLElement} [buttonElement] - Associated trigger button.
+   */
+  function speakInQueue(text, lang, rate, buttonElement) {
+    if (!('speechSynthesis' in window)) return;
+    if (!text || typeof text !== 'string') return;
+
+    // If already playing from this same button, toggle off
+    if (isSpeakingQueue && activeSpeakingButton === buttonElement) {
+      stopSpeech();
+      return;
+    }
+
+    stopSpeech();
+
+    // Split text into individual sentences at sentence punctuation boundaries
+    const rawSegments = text.match(/[^.!?\n]+[.!?\n]*/g) || [text];
+    const queue = rawSegments.map((s) => s.trim()).filter(Boolean);
+    if (queue.length === 0) return;
+
+    isSpeakingQueue = true;
+    currentUtteranceQueue = queue;
+    activeSpeakingButton = buttonElement || null;
+    if (buttonElement) {
+      buttonElement.classList.add('playing');
+    }
+
+    let index = 0;
+
+    function speakNext() {
+      if (!isSpeakingQueue || index >= currentUtteranceQueue.length) {
+        stopSpeech();
+        return;
+      }
+
+      const segment = currentUtteranceQueue[index++];
+      const utterance = new SpeechSynthesisUtterance(segment);
+      utterance.lang = lang || 'en-US';
+      utterance.rate = typeof rate === 'number' && rate > 0 ? rate : 0.95;
+
+      // Attach detected voice if speaking Bangla
+      if (lang && lang.toLowerCase().startsWith('bn')) {
+        if (!_cachedBanglaVoice && 'speechSynthesis' in window) {
+          const voices = window.speechSynthesis.getVoices() || [];
+          _cachedBanglaVoice = voices.find((v) => (v.lang === 'bn-BD' || v.lang === 'bn_BD') && /natural|online/i.test(v.name)) ||
+                               voices.find((v) => v.lang === 'bn-BD' || v.lang === 'bn_BD') ||
+                               voices.find((v) => (v.lang === 'bn-IN' || v.lang === 'bn_IN') && /natural|online/i.test(v.name)) ||
+                               voices.find((v) => v.lang === 'bn-IN' || v.lang === 'bn_IN') ||
+                               voices.find((v) => (v.lang && (v.lang.toLowerCase().startsWith('bn') || v.lang.toLowerCase().startsWith('ben'))) ||
+                                                  (v.name && /bangla|bengali/i.test(v.name))) ||
+                               null;
+        }
+        if (_cachedBanglaVoice) {
+          utterance.voice = _cachedBanglaVoice;
+        }
+      }
+
+      utterance.onend = () => {
+        if (isSpeakingQueue) {
+          speakNext();
+        }
+      };
+
+      utterance.onerror = (e) => {
+        if (e.error !== 'canceled' && e.error !== 'interrupted') {
+          console.warn('Queued TTS error:', e);
+        }
+        stopSpeech();
+      };
+
+      window.speechSynthesis.speak(utterance);
+    }
+
+    speakNext();
+  }
+
+  /**
+   * Hides and destroys the floating "অ" translation action button.
+   */
+  function hideFloatingButton() {
+    if (activeFloatingHost) {
+      try {
+        activeFloatingHost.remove();
+      } catch (err) {}
+      activeFloatingHost = null;
+    }
+  }
+
+  /**
+   * Renders a small floating "অ" button near the end of a multi-word selection.
+   * @param {DOMRect} selectionRect
+   */
+  function showFloatingButton(selectionRect) {
+    hideFloatingButton();
+
+    const host = document.createElement('div');
+    host.id = 'eng-bn-floating-action-host';
+    host.style.cssText = `
+      all: initial !important;
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100% !important;
+      height: 0 !important;
+      pointer-events: none !important;
+      z-index: 2147483646 !important;
+    `;
+
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = `
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      .floating-btn {
+        pointer-events: auto;
+        position: absolute;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: #0f172a;
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        border: 1px solid rgba(56, 189, 248, 0.45);
+        color: #38bdf8;
+        font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, sans-serif;
+        font-size: 14px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+        transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+        user-select: none;
+        outline: none;
+      }
+      .floating-btn:hover {
+        transform: scale(1.12);
+        border-color: #38bdf8;
+        color: #ffffff;
+        box-shadow: 0 6px 18px rgba(56, 189, 248, 0.35);
+      }
+      .floating-btn:focus-visible {
+        outline: 2px solid #38bdf8;
+        outline-offset: 2px;
+      }
+    `;
+
+    const btn = document.createElement('button');
+    btn.className = 'floating-btn';
+    btn.title = 'অনুবাদ করুন (Translate sentence)';
+    btn.setAttribute('aria-label', 'Translate selected text');
+    btn.textContent = 'অ';
+
+    const scrollX = window.pageXOffset || document.documentElement.scrollLeft || 0;
+    const scrollY = window.pageYOffset || document.documentElement.scrollTop || 0;
+    const viewportWidth = document.documentElement.clientWidth;
+
+    let btnLeft = selectionRect.right + scrollX + 6;
+    let btnTop = selectionRect.bottom + scrollY + 4;
+
+    if (btnLeft + 32 > scrollX + viewportWidth) {
+      btnLeft = selectionRect.right + scrollX - 32;
+    }
+
+    btn.style.left = `${Math.round(btnLeft)}px`;
+    btn.style.top = `${Math.round(btnTop)}px`;
+
+    // Prevent mousedown from clearing the user's active text selection
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      hideFloatingButton();
+      triggerSelectionTranslation();
+    });
+
+    shadow.appendChild(style);
+    shadow.appendChild(btn);
+    document.documentElement.appendChild(host);
+    activeFloatingHost = host;
+  }
+
+  /**
+   * Remove any active floating tooltip from DOM, clear word highlights, and stop speech.
    */
   function removeTooltip() {
+    stopSpeech();
     if (activeTooltipHost) {
       try {
         activeTooltipHost.remove();
@@ -366,33 +605,47 @@
   }
 
   /**
-   * Pointerdown handler to dismiss tooltip when clicking outside
+   * Pointerdown handler to dismiss tooltip when clicking outside.
    * @param {PointerEvent} event
    */
   function handlePointerDownOutside(event) {
-    if (!activeTooltipHost) return;
     const path = event.composedPath ? event.composedPath() : [];
-    if (!path.includes(activeTooltipHost)) {
+    if (activeFloatingHost && !path.includes(activeFloatingHost)) {
+      hideFloatingButton();
+    }
+    if (activeTooltipHost && !path.includes(activeTooltipHost)) {
       removeTooltip();
     }
   }
 
   /**
-   * Escape key handler to dismiss tooltip
+   * Escape key handler to dismiss tooltip and floating button.
    * @param {KeyboardEvent} event
    */
   function handleEscapeKey(event) {
     if (event.key === 'Escape') {
       removeTooltip();
+      hideFloatingButton();
       cancelHoverTimer();
     }
   }
 
   /**
-   * Scroll handler to dismiss tooltip on significant page scroll and cancel pending hover
+   * Scroll handler to dismiss tooltip on significant page scroll and cancel pending hover.
+   * Does NOT dismiss when scrolling inside the tooltip's own scrollable content area.
+   * @param {Event} [event]
    */
-  function handleScrollThreshold() {
+  function handleScrollThreshold(event) {
+    // If the scroll event originated from within the active tooltip host, ignore
+    if (activeTooltipHost && event && event.target) {
+      if (event.target === activeTooltipHost || (activeTooltipHost.shadowRoot && activeTooltipHost.shadowRoot.contains(event.target))) {
+        return;
+      }
+    }
+
     cancelHoverTimer();
+    hideFloatingButton();
+
     if (!activeTooltipHost) return;
     const currentY = window.pageYOffset || document.documentElement.scrollTop || 0;
     const currentX = window.pageXOffset || document.documentElement.scrollLeft || 0;
@@ -410,41 +663,12 @@
   }
 
   /**
-   * Pronounce English text using the tts.js speak() function.
-   * @param {string} text
-   * @param {HTMLElement} [buttonElement]
-   */
-  function speakEnglishWord(text, buttonElement) {
-    try {
-      if (typeof speak === 'function') {
-        speak(text, 'en-US', getSpeechRate(), buttonElement);
-      }
-    } catch (err) {
-      console.warn('English speech synthesis failed:', err);
-    }
-  }
-
-  /**
-   * Pronounce Bangla text using the tts.js speak() function.
-   * @param {string} text
-   * @param {HTMLElement} [buttonElement]
-   */
-  function speakBanglaWord(text, buttonElement) {
-    try {
-      if (typeof speak === 'function') {
-        speak(text, 'bn-BD', getSpeechRate(), buttonElement);
-      }
-    } catch (err) {
-      console.warn('Bangla speech synthesis failed:', err);
-    }
-  }
-
-  /**
-   * Copy translation to clipboard with visual feedback and accessibility announcement.
+   * Copy text to clipboard with visual feedback and accessibility announcement.
    * @param {string} text
    * @param {HTMLElement} btn
+   * @param {string} defaultLabel
    */
-  async function copyToClipboard(text, btn) {
+  async function copyToClipboard(text, btn, defaultLabel = 'কপি করুন') {
     try {
       await navigator.clipboard.writeText(text);
       const originalHTML = btn.innerHTML;
@@ -459,8 +683,8 @@
       setTimeout(() => {
         if (btn) {
           btn.innerHTML = originalHTML;
-          btn.title = 'কপি করুন';
-          btn.setAttribute('aria-label', 'অনুবাদ কপি করুন');
+          btn.title = defaultLabel;
+          btn.setAttribute('aria-label', defaultLabel);
         }
       }, 1500);
     } catch (err) {
@@ -470,7 +694,7 @@
 
   /**
    * Reads, validates, and translates the active webpage text selection.
-   * Reused by double-click and keyboard shortcuts (TRANSLATE_SELECTION).
+   * Reused by double-click, triple-click, floating button, and keyboard shortcuts (TRANSLATE_SELECTION).
    * @returns {boolean} True if a valid selection was found and rendered.
    */
   function triggerSelectionTranslation() {
@@ -479,8 +703,8 @@
     const selection = window.getSelection();
     if (!selection || !selection.rangeCount) return false;
 
-    const rawSelected = selection.toString().trim();
-    if (!rawSelected) return false;
+    const rawSelected = selection.toString();
+    if (!rawSelected || !rawSelected.trim()) return false;
 
     // Check if selection focus is within an ignored element
     const anchorElem = selection.anchorNode
@@ -493,45 +717,25 @@
       .replace(/^[\s.,/#!$%\^&\*;:{}=\-_`~()'"\[\]<>?]+|[\s.,/#!$%\^&\*;:{}=\-_`~()'"\[\]<>?]+$/g, '')
       .trim();
 
-    if (!/[a-zA-Z]/.test(cleaned)) return false;
-
-    const words = cleaned.split(/\s+/).filter(Boolean);
-    if (words.length === 0 || words.length > 3) return false;
+    if (!isValidEnglishText(cleaned)) return false;
 
     const range = selection.getRangeAt(0);
     const rect = range.getBoundingClientRect();
     if (!rect || (rect.width === 0 && rect.height === 0)) return false;
 
-    // Build exact highlight range for the cleaned text segment
-    let highlightRange = range;
-    try {
-      if (range.startContainer && range.startContainer === range.endContainer && range.startContainer.nodeType === Node.TEXT_NODE) {
-        const fullNodeText = range.startContainer.textContent || '';
-        const selectedSub = fullNodeText.slice(range.startOffset, range.endOffset);
-        const subIndex = selectedSub.indexOf(cleaned);
-        if (subIndex !== -1) {
-          const exactRange = document.createRange();
-          exactRange.setStart(range.startContainer, range.startOffset + subIndex);
-          exactRange.setEnd(range.startContainer, range.startOffset + subIndex + cleaned.length);
-          highlightRange = exactRange;
-        }
-      }
-    } catch (e) {
-      highlightRange = range;
-    }
-
+    hideFloatingButton();
     cancelHoverTimer();
     removeTooltip();
 
     scrollStartY = window.pageYOffset || document.documentElement.scrollTop || 0;
     scrollStartX = window.pageXOffset || document.documentElement.scrollLeft || 0;
 
-    renderShadowTooltip(cleaned, rect, highlightRange);
+    renderShadowTooltip(cleaned, rect, range);
     return true;
   }
 
   /**
-   * Main double-click event listener
+   * Main double-click event listener.
    * @param {MouseEvent} event
    */
   function handleDoubleClick(event) {
@@ -548,7 +752,82 @@
   }
 
   /**
-   * Mousemove listener for debounced hover word detection
+   * Click handler to detect triple-click paragraph translation.
+   * @param {MouseEvent} event
+   */
+  function handleClick(event) {
+    if (event.detail === 3) {
+      if (!isEnabled) return;
+      if (isIgnoredElement(event.target)) return;
+      setTimeout(() => {
+        triggerSelectionTranslation();
+      }, 15);
+    }
+  }
+
+  /**
+   * Mouseup handler to inspect selection and display the floating "অ" button for sentences.
+   * @param {MouseEvent} event
+   */
+  function handleMouseUp(event) {
+    setTimeout(() => {
+      if (!isEnabled) {
+        hideFloatingButton();
+        return;
+      }
+
+      // Do not trigger floating button if clicking inside active tooltip or existing button
+      if (activeTooltipHost) {
+        const path = event.composedPath ? event.composedPath() : [];
+        if (path.includes(activeTooltipHost)) return;
+      }
+      if (activeFloatingHost) {
+        const path = event.composedPath ? event.composedPath() : [];
+        if (path.includes(activeFloatingHost)) return;
+      }
+
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount) {
+        hideFloatingButton();
+        return;
+      }
+
+      const raw = selection.toString().trim();
+      if (!raw) {
+        hideFloatingButton();
+        return;
+      }
+
+      const words = raw.split(/\s+/).filter(Boolean);
+      // Only show floating button if more than 3 words are selected and valid English
+      if (words.length <= 3 || !isValidEnglishText(raw)) {
+        hideFloatingButton();
+        return;
+      }
+
+      const anchorElem = selection.anchorNode
+        ? (selection.anchorNode.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode.parentElement)
+        : null;
+
+      if (anchorElem && isIgnoredElement(anchorElem)) {
+        hideFloatingButton();
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      const rects = range.getClientRects();
+      const lastRect = rects.length > 0 ? rects[rects.length - 1] : range.getBoundingClientRect();
+      if (!lastRect || (lastRect.width === 0 && lastRect.height === 0)) {
+        hideFloatingButton();
+        return;
+      }
+
+      showFloatingButton(lastRect);
+    }, 20);
+  }
+
+  /**
+   * Mousemove listener for debounced hover word detection.
    * @param {MouseEvent} event
    */
   function handleMouseMove(event) {
@@ -626,7 +905,7 @@
   }
 
   /**
-   * Window mouseleave listener
+   * Window mouseleave listener.
    */
   function handleMouseLeave() {
     cancelHoverTimer();
@@ -634,7 +913,7 @@
 
   /**
    * Render and position accessible Shadow DOM Tooltip.
-   * Reused by double-click, hover, and shortcut triggers without duplication.
+   * Reused by double-click, triple-click, hover, floating button, and shortcut triggers without duplication.
    * @param {string} word
    * @param {DOMRect} selectionRect
    * @param {Range} [wordRange]
@@ -642,10 +921,13 @@
   function renderShadowTooltip(word, selectionRect, wordRange) {
     ensureLocalFontsInjected();
 
+    const wordCount = word.split(/\s+/).filter(Boolean).length;
+    const isSentenceInitial = wordCount > 3;
+
     // Set active word
     currentActiveWord = word.toLowerCase();
 
-    // Apply CSS Custom Highlight on the target word Range
+    // Apply CSS Custom Highlight on the target text Range
     if (wordRange) {
       applyWordHighlight(wordRange);
     }
@@ -788,6 +1070,32 @@
         transform: scale(1);
       }
 
+      /* Sentence mode expansion */
+      .tooltip-card[data-mode="sentence"] {
+        width: min(420px, calc(100vw - 32px));
+        max-height: 60vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .tooltip-card[data-mode="sentence"] .card-body {
+        overflow-y: auto;
+        max-height: calc(60vh - 65px);
+        overscroll-behavior: contain;
+        padding-right: 4px;
+      }
+
+      .tooltip-card[data-mode="sentence"] .card-body::-webkit-scrollbar {
+        width: 4px;
+      }
+      .tooltip-card[data-mode="sentence"] .card-body::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 4px;
+      }
+      .tooltip-card[data-theme="light"][data-mode="sentence"] .card-body::-webkit-scrollbar-thumb {
+        background: rgba(0, 0, 0, 0.2);
+      }
+
       /* Caret Arrow */
       .tooltip-arrow {
         position: absolute;
@@ -821,6 +1129,7 @@
         gap: 8px;
         padding-bottom: 8px;
         border-bottom: 1px solid var(--divider);
+        flex-shrink: 0;
       }
 
       .word-group {
@@ -837,7 +1146,23 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        max-width: 140px;
+        max-width: 130px;
+      }
+
+      .badge-mode {
+        display: inline-flex;
+        align-items: center;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        background: rgba(56, 189, 248, 0.15);
+        color: #38bdf8;
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        border-radius: 4px;
+        padding: 1px 5px;
+        line-height: 1.2;
+        flex-shrink: 0;
       }
 
       .offline-badge {
@@ -915,31 +1240,90 @@
         padding-top: 10px;
       }
 
-      /* Loading State */
-      .loading-state {
+      /* Loading Skeleton */
+      .skeleton-container {
         display: flex;
-        align-items: center;
-        gap: 10px;
-        color: var(--text-muted);
-        font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, sans-serif;
-        font-size: 14px;
+        flex-direction: column;
+        gap: 8px;
         padding: 6px 0;
       }
 
-      .spinner {
-        width: 16px;
-        height: 16px;
-        border: 2px solid rgba(99, 102, 241, 0.2);
-        border-top-color: #6366f1;
-        border-radius: 50%;
-        animation: spin 0.75s linear infinite;
+      .skeleton-line {
+        height: 11px;
+        border-radius: 4px;
+        background: linear-gradient(90deg, rgba(255, 255, 255, 0.06) 25%, rgba(255, 255, 255, 0.14) 50%, rgba(255, 255, 255, 0.06) 75%);
+        background-size: 200% 100%;
+        animation: shimmer 1.4s infinite;
       }
 
-      @keyframes spin {
-        to { transform: rotate(360deg); }
+      .tooltip-card[data-theme="light"] .skeleton-line {
+        background: linear-gradient(90deg, rgba(0, 0, 0, 0.05) 25%, rgba(0, 0, 0, 0.12) 50%, rgba(0, 0, 0, 0.05) 75%);
+        background-size: 200% 100%;
       }
 
-      /* Bangla Primary Result */
+      @keyframes shimmer {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+      }
+
+      .skeleton-line.line-1 { width: 92%; }
+      .skeleton-line.line-2 { width: 78%; }
+      .skeleton-line.line-3 { width: 55%; }
+
+      /* Collapsible Original Text Section */
+      .original-section {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--divider);
+        border-radius: 8px;
+        padding: 6px 8px;
+        margin-bottom: 8px;
+      }
+
+      .original-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--text-muted);
+        user-select: none;
+      }
+
+      .original-header:hover {
+        color: var(--text-main);
+      }
+
+      .original-arrow {
+        width: 12px;
+        height: 12px;
+        transition: transform 0.2s ease;
+      }
+
+      .original-arrow.open {
+        transform: rotate(180deg);
+      }
+
+      .original-content {
+        font-size: 12px;
+        line-height: 1.45;
+        color: var(--text-original);
+        margin-top: 4px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        cursor: pointer;
+      }
+
+      .original-content.clamped {
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      /* Bangla Primary Result (Word Mode) */
       .bangla-result-row {
         display: flex;
         align-items: center;
@@ -956,8 +1340,37 @@
         word-break: break-word;
       }
 
-      .btn-speak-bn {
-        flex-shrink: 0;
+      /* Bangla Sentence Paragraph (Sentence Mode) */
+      .bangla-sentence-text {
+        font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, 'SolaimanLipi', 'Vrinda', sans-serif;
+        font-size: 14.5px;
+        font-weight: 500;
+        line-height: 1.6;
+        color: var(--primary-bn);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      /* Sentence Status Notices */
+      .sentence-notice {
+        font-size: 11px;
+        line-height: 1.35;
+        margin-top: 6px;
+        padding: 3px 7px;
+        border-radius: 4px;
+        display: inline-block;
+      }
+
+      .truncate-notice {
+        background: rgba(245, 158, 11, 0.15);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.3);
+      }
+
+      .approximate-notice {
+        background: rgba(99, 102, 241, 0.15);
+        color: #a5b4fc;
+        border: 1px solid rgba(99, 102, 241, 0.3);
       }
 
       /* Dictionary Meanings */
@@ -1000,7 +1413,7 @@
       @media (prefers-reduced-motion: reduce) {
         .tooltip-card,
         .icon-btn,
-        .spinner {
+        .skeleton-line {
           animation: none !important;
           transition: none !important;
         }
@@ -1013,28 +1426,43 @@
     card.setAttribute('aria-modal', 'false');
     card.setAttribute('aria-label', `English to Bangla translation for "${word}"`);
 
+    // Set layout mode attribute (sentence or word)
+    card.setAttribute('data-mode', isSentenceInitial ? 'sentence' : 'word');
+
     // Apply active theme (dark / light / auto)
     const activeTheme = currentSettings.theme || 'dark';
     card.setAttribute('data-theme', activeTheme);
 
+    // Initial header & skeleton setup
+    const initialHeaderTitle = isSentenceInitial ? 'Sentence' : escapeHtml(word);
     card.innerHTML = `
       <div class="tooltip-arrow"></div>
       <div class="card-header">
         <div class="word-group">
-          <span class="original-word" title="${escapeHtml(word)}">${escapeHtml(word)}</span>
+          ${isSentenceInitial ? '<span class="badge-mode">Sentence</span>' : `<span class="original-word" title="${escapeHtml(word)}">${initialHeaderTitle}</span>`}
         </div>
         <div class="header-actions">
-          <button class="icon-btn btn-speak btn-speak-en" title="উচ্চারণ শুনুন (English)" aria-label="উচ্চারণ শুনুন (English)">
+          <button class="icon-btn btn-speak btn-speak-en" title="ইংরেজি উচ্চারণ শুনুন (Speak English)" aria-label="Speak English text">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
               <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
             </svg>
           </button>
-          <button class="icon-btn btn-copy" title="কপি করুন" aria-label="অনুবাদ কপি করুন" style="display: none;">
+          <button class="icon-btn btn-speak btn-speak-bn" style="${isSentenceInitial ? '' : 'display: none;'}" title="বাংলা উচ্চারণ শুনুন (Speak Bangla)" aria-label="Speak Bangla translation">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+            </svg>
+          </button>
+          <button class="icon-btn btn-copy btn-copy-translation" title="অনুবাদ কপি করুন (Copy translation)" aria-label="Copy translation" style="display: none;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
               <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </button>
-          <button class="icon-btn close-btn" title="বন্ধ করুন" aria-label="উইন্ডো বন্ধ করুন">
+          <button class="icon-btn btn-copy-original" style="${isSentenceInitial ? 'display: none;' : 'display: none;'}" title="মূল টেক্সট কপি করুন (Copy original)" aria-label="Copy original text">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+          </button>
+          <button class="icon-btn close-btn" title="বন্ধ করুন (Close)" aria-label="Close dialog">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
               <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -1042,9 +1470,10 @@
         </div>
       </div>
       <div class="card-body">
-        <div class="loading-state">
-          <div class="spinner"></div>
-          <span>অনুবাদ করা হচ্ছে...</span>
+        <div class="skeleton-container">
+          <div class="skeleton-line line-1"></div>
+          <div class="skeleton-line line-2"></div>
+          <div class="skeleton-line line-3"></div>
         </div>
       </div>
     `;
@@ -1056,12 +1485,14 @@
     activeTooltipHost = host;
 
     const btnSpeakEn = card.querySelector('.btn-speak-en');
-    const btnCopy = card.querySelector('.btn-copy');
+    const btnSpeakBn = card.querySelector('.btn-speak-bn');
+    const btnCopyTranslation = card.querySelector('.btn-copy-translation');
+    const btnCopyOriginal = card.querySelector('.btn-copy-original');
     const btnClose = card.querySelector('.close-btn');
 
     btnSpeakEn.addEventListener('click', (e) => {
       e.stopPropagation();
-      speakEnglishWord(word, btnSpeakEn);
+      speakInQueue(word, 'en-US', getSpeechRate(), btnSpeakEn);
     });
 
     btnClose.addEventListener('click', (e) => {
@@ -1084,13 +1515,36 @@
         const body = card.querySelector('.card-body');
         if (!body) return;
 
+        // Prevent body scroll event from propagating out
+        body.addEventListener('wheel', (e) => {
+          e.stopPropagation();
+        }, { passive: true });
+
         if (response && response.success && response.data) {
           const data = response.data;
-          const primaryBangla = data.primary || 'অনুবাদ পাওয়া যায়নি';
+          const isSentence = data.mode === 'sentence' || isSentenceInitial;
+          const primaryBangla = data.primary || data.translation || 'অনুবাদ পাওয়া যায়নি';
 
-          if (data.source === 'offline') {
-            const wordGroup = card.querySelector('.word-group');
-            if (wordGroup && !wordGroup.querySelector('.offline-badge')) {
+          card.setAttribute('data-mode', isSentence ? 'sentence' : 'word');
+
+          // Header badges (Sentence badge and/or Offline badge)
+          const wordGroup = card.querySelector('.word-group');
+          if (wordGroup) {
+            wordGroup.innerHTML = '';
+            if (isSentence) {
+              const sentenceBadge = document.createElement('span');
+              sentenceBadge.className = 'badge-mode';
+              sentenceBadge.textContent = 'Sentence';
+              wordGroup.appendChild(sentenceBadge);
+            } else {
+              const origWordSpan = document.createElement('span');
+              origWordSpan.className = 'original-word';
+              origWordSpan.title = word;
+              origWordSpan.textContent = word;
+              wordGroup.appendChild(origWordSpan);
+            }
+
+            if (data.source === 'offline') {
               const badge = document.createElement('span');
               badge.className = 'offline-badge';
               badge.textContent = 'offline';
@@ -1099,29 +1553,7 @@
             }
           }
 
-          btnCopy.style.display = 'inline-flex';
-          btnCopy.addEventListener('click', (e) => {
-            e.stopPropagation();
-            copyToClipboard(primaryBangla, btnCopy);
-          });
-
-          let dictHTML = '';
-          if (Array.isArray(data.dictionary) && data.dictionary.length > 0) {
-            dictHTML = data.dictionary
-              .slice(0, 2)
-              .map((item) => {
-                const terms = item.terms.join(', ');
-                return `
-                  <div class="dict-group">
-                    <span class="pos-tag">${escapeHtml(item.pos)}</span>
-                    <div class="pos-terms">${escapeHtml(terms)}</div>
-                  </div>
-                `;
-              })
-              .join('');
-          }
-
-          // Dynamically check if Bangla voice is available if not detected initially
+          // Ensure Bangla voice is checked
           if (!banglaVoiceAvailable && typeof findBanglaVoice === 'function') {
             try {
               const voice = await findBanglaVoice();
@@ -1131,34 +1563,126 @@
             }
           }
 
-          // Build Bangla speak button HTML
-          const bnBtnDisabled = !banglaVoiceAvailable;
-          const bnBtnTitle = bnBtnDisabled
+          const bnDisabled = !banglaVoiceAvailable;
+          const bnTitle = bnDisabled
             ? 'No Bangla voice installed on this device.'
-            : 'বাংলা উচ্চারণ শুনুন';
-          const bnBtnAriaLabel = bnBtnDisabled
+            : 'বাংলা উচ্চারণ শুনুন (Speak Bangla)';
+          const bnAriaLabel = bnDisabled
             ? 'No Bangla voice installed on this device.'
-            : 'বাংলা উচ্চারণ শুনুন';
+            : 'Speak Bangla translation';
 
-          body.innerHTML = `
-            <div class="bangla-result-row">
-              <div class="bangla-primary">${escapeHtml(primaryBangla)}</div>
-              <button class="icon-btn btn-speak-bn" title="${escapeHtml(bnBtnTitle)}" aria-label="${escapeHtml(bnBtnAriaLabel)}" ${bnBtnDisabled ? 'disabled' : ''}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                </svg>
-              </button>
-            </div>
-            ${dictHTML}
-          `;
+          // Configure buttons
+          btnCopyTranslation.style.display = 'inline-flex';
+          btnCopyTranslation.addEventListener('click', (e) => {
+            e.stopPropagation();
+            copyToClipboard(primaryBangla, btnCopyTranslation, 'অনুবাদ কপি করুন (Copy translation)');
+          });
 
-          // Attach Bangla speak event
-          const btnSpeakBn = body.querySelector('.btn-speak-bn');
-          if (btnSpeakBn && !bnBtnDisabled) {
-            btnSpeakBn.addEventListener('click', (e) => {
+          if (isSentence) {
+            // Sentence Mode Buttons
+            btnSpeakBn.style.display = 'inline-flex';
+            btnSpeakBn.title = bnTitle;
+            btnSpeakBn.setAttribute('aria-label', bnAriaLabel);
+            btnSpeakBn.disabled = bnDisabled;
+            if (!bnDisabled) {
+              btnSpeakBn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                speakInQueue(primaryBangla, 'bn-BD', getSpeechRate(), btnSpeakBn);
+              });
+            }
+
+            btnCopyOriginal.style.display = 'inline-flex';
+            btnCopyOriginal.addEventListener('click', (e) => {
               e.stopPropagation();
-              speakBanglaWord(primaryBangla, btnSpeakBn);
+              copyToClipboard(word, btnCopyOriginal, 'মূল টেক্সট কপি করুন (Copy original)');
             });
+
+            // Status notices
+            let noticesHTML = '';
+            if (data.truncated) {
+              noticesHTML += `<div class="sentence-notice truncate-notice">Showing the first ${word.length} characters only.</div>`;
+            }
+            if (data.approximate) {
+              noticesHTML += `<div class="sentence-notice approximate-notice">Offline approximate (word-by-word) translation.</div>`;
+            }
+
+            body.innerHTML = `
+              <div class="original-section">
+                <div class="original-header" role="button" tabindex="0" aria-expanded="false">
+                  <span>Original</span>
+                  <svg class="original-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+                <div class="original-content clamped" title="Click to expand/collapse">${escapeHtml(word)}</div>
+              </div>
+              <div class="bangla-sentence-text">${escapeHtml(primaryBangla)}</div>
+              ${noticesHTML}
+            `;
+
+            // Toggle collapsible original section
+            const origHeader = body.querySelector('.original-header');
+            const origContent = body.querySelector('.original-content');
+            const origArrow = body.querySelector('.original-arrow');
+
+            const toggleCollapse = (e) => {
+              e.stopPropagation();
+              const isClamped = origContent.classList.toggle('clamped');
+              origArrow.classList.toggle('open', !isClamped);
+              origHeader.setAttribute('aria-expanded', String(!isClamped));
+              positionTooltipCard(card, selectionRect);
+            };
+
+            if (origHeader && origContent) {
+              origHeader.addEventListener('click', toggleCollapse);
+              origHeader.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  toggleCollapse(e);
+                }
+              });
+              origContent.addEventListener('click', toggleCollapse);
+            }
+          } else {
+            // Word Mode Body
+            btnSpeakBn.style.display = 'none';
+            btnCopyOriginal.style.display = 'none';
+
+            let dictHTML = '';
+            if (Array.isArray(data.dictionary) && data.dictionary.length > 0) {
+              dictHTML = data.dictionary
+                .slice(0, 2)
+                .map((item) => {
+                  const terms = item.terms.join(', ');
+                  return `
+                    <div class="dict-group">
+                      <span class="pos-tag">${escapeHtml(item.pos)}</span>
+                      <div class="pos-terms">${escapeHtml(terms)}</div>
+                    </div>
+                  `;
+                })
+                .join('');
+            }
+
+            body.innerHTML = `
+              <div class="bangla-result-row">
+                <div class="bangla-primary">${escapeHtml(primaryBangla)}</div>
+                <button class="icon-btn btn-speak-bn" title="${escapeHtml(bnTitle)}" aria-label="${escapeHtml(bnAriaLabel)}" ${bnDisabled ? 'disabled' : ''}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                  </svg>
+                </button>
+              </div>
+              ${dictHTML}
+            `;
+
+            const wordBnBtn = body.querySelector('.btn-speak-bn');
+            if (wordBnBtn && !bnDisabled) {
+              wordBnBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                speakInQueue(primaryBangla, 'bn-BD', getSpeechRate(), wordBnBtn);
+              });
+            }
           }
         } else {
           const errMsg = response?.error || 'অনুবাদ লোড করা যায়নি।';
@@ -1167,6 +1691,7 @@
           `;
         }
 
+        // Recompute position after translation text loads
         positionTooltipCard(card, selectionRect);
       }
     );
@@ -1179,7 +1704,7 @@
   }
 
   /**
-   * Position tooltip card relative to selection
+   * Position tooltip card relative to selection with automatic viewport clamping.
    * @param {HTMLElement} card
    * @param {DOMRect} selectionRect
    */
@@ -1217,13 +1742,18 @@
       card.setAttribute('data-placement', 'bottom');
     }
 
+    // Guard against overflow off top of page
+    if (cardTop < scrollY + 10) {
+      cardTop = scrollY + 10;
+    }
+
     card.style.left = `${Math.round(cardLeft)}px`;
     card.style.top = `${Math.round(cardTop)}px`;
     card.classList.add('visible');
   }
 
   /**
-   * Helper to escape HTML characters
+   * Helper to escape HTML characters.
    * @param {string} str
    * @returns {string}
    */
@@ -1248,6 +1778,14 @@
 
   // Register document listeners
   document.addEventListener('dblclick', handleDoubleClick, true);
+  document.addEventListener('click', handleClick, true);
+  document.addEventListener('mouseup', handleMouseUp, true);
   document.addEventListener('mousemove', handleMouseMove, { passive: true });
   document.addEventListener('mouseleave', handleMouseLeave, { passive: true });
+  document.addEventListener('selectionchange', () => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) {
+      hideFloatingButton();
+    }
+  });
 })();
