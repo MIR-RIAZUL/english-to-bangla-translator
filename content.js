@@ -1,8 +1,9 @@
 /**
  * Content Script
  * Listens for double-click, hover, and keyboard shortcut (TRANSLATE_SELECTION) events,
- * extracts English words, renders an isolated Shadow DOM floating tooltip,
- * and manages English & Bangla pronunciation, clipboard copy, and dismissal events.
+ * extracts English words, renders an isolated accessible Shadow DOM floating tooltip,
+ * provides dual-language text-to-speech, clipboard copy, theme support (dark/light/auto),
+ * and highlights words using the CSS Custom Highlight API.
  */
 
 (() => {
@@ -25,8 +26,12 @@
     triggerMode: 'dblclick',
     hoverDelay: 600,
     modifierKey: 'none',
-    speechRate: 0.95
+    speechRate: 0.95,
+    highlightColor: '#fde68a',
+    theme: 'dark'
   };
+
+  const HIGHLIGHT_NAME = 'eng-bn-word-highlight';
 
   /**
    * Injects local extension @font-face definitions into document.head once per page.
@@ -86,6 +91,74 @@
   // Attempt initial font registration
   ensureLocalFontsInjected();
 
+  /**
+   * Checks whether the browser supports the CSS Custom Highlight API.
+   * @returns {boolean} True if supported.
+   */
+  function isCustomHighlightSupported() {
+    return typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight !== 'undefined';
+  }
+
+  /**
+   * Injects or updates the CSS ::highlight() pseudo-element rule in the document head.
+   */
+  function ensureHighlightStyleInjected() {
+    if (!isCustomHighlightSupported()) return;
+
+    try {
+      const styleId = 'eng-bn-translator-highlight-style';
+      let style = document.getElementById(styleId);
+      if (!style) {
+        style = document.createElement('style');
+        style.id = styleId;
+        const target = document.head || document.documentElement;
+        if (target) {
+          target.appendChild(style);
+        }
+      }
+
+      const color = currentSettings.highlightColor || '#fde68a';
+      style.textContent = `
+        ::highlight(${HIGHLIGHT_NAME}) {
+          background-color: ${color};
+          color: #0f172a;
+        }
+      `;
+    } catch (err) {
+      console.warn('Failed to inject custom highlight stylesheet:', err);
+    }
+  }
+
+  /**
+   * Applies a custom CSS highlight on the translated word Range using CSS.highlights.
+   * If unsupported, skips highlighting completely without modifying page DOM.
+   * @param {Range|null} range - Target text Range.
+   */
+  function applyWordHighlight(range) {
+    if (!range || !isCustomHighlightSupported()) return;
+
+    try {
+      ensureHighlightStyleInjected();
+      const highlight = new Highlight(range);
+      CSS.highlights.set(HIGHLIGHT_NAME, highlight);
+    } catch (err) {
+      console.warn('Failed to apply CSS word highlight:', err);
+    }
+  }
+
+  /**
+   * Clears any active CSS word highlight.
+   */
+  function clearWordHighlight() {
+    if (!isCustomHighlightSupported()) return;
+
+    try {
+      CSS.highlights.delete(HIGHLIGHT_NAME);
+    } catch (err) {
+      // Silently ignore if already absent
+    }
+  }
+
   // Detect Bangla voice availability using tts.js (loaded before content.js)
   try {
     if (typeof findBanglaVoice === 'function') {
@@ -109,6 +182,7 @@
     if (result.settings && typeof result.settings === 'object') {
       currentSettings = { ...currentSettings, ...result.settings };
     }
+    ensureHighlightStyleInjected();
   });
 
   // Listen for real-time changes from popup or options
@@ -126,6 +200,17 @@
         const mode = currentSettings.triggerMode || 'dblclick';
         if (mode !== 'hover' && mode !== 'both') {
           cancelHoverTimer();
+        }
+
+        // Live update custom highlight style
+        ensureHighlightStyleInjected();
+
+        // Live update active tooltip theme if open
+        if (activeTooltipHost && activeTooltipHost.shadowRoot) {
+          const card = activeTooltipHost.shadowRoot.querySelector('.tooltip-card');
+          if (card) {
+            card.setAttribute('data-theme', currentSettings.theme || 'dark');
+          }
         }
       }
     }
@@ -167,11 +252,11 @@
   }
 
   /**
-   * Extracts the word and bounding client rectangle under a given viewport point.
+   * Extracts the word, bounding client rectangle, and text Range under a given viewport point.
    * Uses document.caretRangeFromPoint with fallback to document.caretPositionFromPoint.
    * @param {number} x - Client X coordinate.
    * @param {number} y - Client Y coordinate.
-   * @returns {{ word: string, rect: DOMRect } | null}
+   * @returns {{ word: string, rect: DOMRect, range: Range } | null}
    */
   function getWordAtPoint(x, y) {
     let textNode = null;
@@ -238,7 +323,8 @@
 
       return {
         word: cleaned,
-        rect: rect
+        rect: rect,
+        range: wordRange
       };
     } catch (err) {
       return null;
@@ -257,7 +343,7 @@
   }
 
   /**
-   * Remove any active floating tooltip from DOM
+   * Remove any active floating tooltip from DOM and clear word highlights.
    */
   function removeTooltip() {
     if (activeTooltipHost) {
@@ -269,6 +355,10 @@
       activeTooltipHost = null;
     }
     currentActiveWord = '';
+
+    // Clear CSS highlight
+    clearWordHighlight();
+
     // Remove transient dismissal listeners
     document.removeEventListener('pointerdown', handlePointerDownOutside, true);
     document.removeEventListener('keydown', handleEscapeKey, true);
@@ -277,6 +367,7 @@
 
   /**
    * Pointerdown handler to dismiss tooltip when clicking outside
+   * @param {PointerEvent} event
    */
   function handlePointerDownOutside(event) {
     if (!activeTooltipHost) return;
@@ -288,6 +379,7 @@
 
   /**
    * Escape key handler to dismiss tooltip
+   * @param {KeyboardEvent} event
    */
   function handleEscapeKey(event) {
     if (event.key === 'Escape') {
@@ -348,7 +440,7 @@
   }
 
   /**
-   * Copy translation to clipboard with visual feedback
+   * Copy translation to clipboard with visual feedback and accessibility announcement.
    * @param {string} text
    * @param {HTMLElement} btn
    */
@@ -362,10 +454,13 @@
         </svg>
       `;
       btn.title = 'কপি হয়েছে!';
+      btn.setAttribute('aria-label', 'কপি হয়েছে!');
+
       setTimeout(() => {
         if (btn) {
           btn.innerHTML = originalHTML;
           btn.title = 'কপি করুন';
+          btn.setAttribute('aria-label', 'অনুবাদ কপি করুন');
         }
       }, 1500);
     } catch (err) {
@@ -407,13 +502,31 @@
     const rect = range.getBoundingClientRect();
     if (!rect || (rect.width === 0 && rect.height === 0)) return false;
 
+    // Build exact highlight range for the cleaned text segment
+    let highlightRange = range;
+    try {
+      if (range.startContainer && range.startContainer === range.endContainer && range.startContainer.nodeType === Node.TEXT_NODE) {
+        const fullNodeText = range.startContainer.textContent || '';
+        const selectedSub = fullNodeText.slice(range.startOffset, range.endOffset);
+        const subIndex = selectedSub.indexOf(cleaned);
+        if (subIndex !== -1) {
+          const exactRange = document.createRange();
+          exactRange.setStart(range.startContainer, range.startOffset + subIndex);
+          exactRange.setEnd(range.startContainer, range.startOffset + subIndex + cleaned.length);
+          highlightRange = exactRange;
+        }
+      }
+    } catch (e) {
+      highlightRange = range;
+    }
+
     cancelHoverTimer();
     removeTooltip();
 
     scrollStartY = window.pageYOffset || document.documentElement.scrollTop || 0;
     scrollStartX = window.pageXOffset || document.documentElement.scrollLeft || 0;
 
-    renderShadowTooltip(cleaned, rect);
+    renderShadowTooltip(cleaned, rect, highlightRange);
     return true;
   }
 
@@ -508,7 +621,7 @@
       scrollStartY = window.pageYOffset || document.documentElement.scrollTop || 0;
       scrollStartX = window.pageXOffset || document.documentElement.scrollLeft || 0;
 
-      renderShadowTooltip(found.word, found.rect);
+      renderShadowTooltip(found.word, found.rect, found.range);
     }, delay);
   }
 
@@ -520,16 +633,22 @@
   }
 
   /**
-   * Render and position Shadow DOM Tooltip
+   * Render and position accessible Shadow DOM Tooltip.
    * Reused by double-click, hover, and shortcut triggers without duplication.
    * @param {string} word
    * @param {DOMRect} selectionRect
+   * @param {Range} [wordRange]
    */
-  function renderShadowTooltip(word, selectionRect) {
+  function renderShadowTooltip(word, selectionRect, wordRange) {
     ensureLocalFontsInjected();
 
     // Set active word
     currentActiveWord = word.toLowerCase();
+
+    // Apply CSS Custom Highlight on the target word Range
+    if (wordRange) {
+      applyWordHighlight(wordRange);
+    }
 
     // Create isolation host element
     const host = document.createElement('div');
@@ -555,16 +674,105 @@
         padding: 0;
       }
 
+      /* Base Theme Variables - Dark Theme (Default) */
+      .tooltip-card {
+        --bg-start: #1e293b;
+        --bg-end: #0f172a;
+        --border-color: rgba(255, 255, 255, 0.14);
+        --shadow: 0 16px 36px -4px rgba(0, 0, 0, 0.55), 0 8px 16px -6px rgba(0, 0, 0, 0.45);
+        --text-main: #f8fafc;
+        --text-original: #e2e8f0;
+        --divider: rgba(255, 255, 255, 0.08);
+        --btn-bg: rgba(255, 255, 255, 0.06);
+        --btn-border: rgba(255, 255, 255, 0.1);
+        --btn-color: #94a3b8;
+        --btn-hover-bg: rgba(255, 255, 255, 0.15);
+        --btn-hover-color: #ffffff;
+        --primary-bn: #38bdf8;
+        --pos-bg: rgba(99, 102, 241, 0.18);
+        --pos-text: #a5b4fc;
+        --pos-terms: #cbd5e1;
+        --text-muted: #94a3b8;
+        --error-text: #f87171;
+        --focus-ring: #38bdf8;
+        --focus-glow: rgba(56, 189, 248, 0.3);
+        --arrow-bg-top: #0f172a;
+        --arrow-bg-bottom: #1e293b;
+        --offline-bg: rgba(245, 158, 11, 0.18);
+        --offline-text: #fbbf24;
+        --offline-border: rgba(245, 158, 11, 0.35);
+      }
+
+      /* Explicit Light Theme */
+      .tooltip-card[data-theme="light"] {
+        --bg-start: #f8fafc;
+        --bg-end: #ffffff;
+        --border-color: rgba(0, 0, 0, 0.12);
+        --shadow: 0 16px 36px -4px rgba(0, 0, 0, 0.18), 0 8px 16px -6px rgba(0, 0, 0, 0.12);
+        --text-main: #1e293b;
+        --text-original: #0f172a;
+        --divider: rgba(0, 0, 0, 0.08);
+        --btn-bg: rgba(0, 0, 0, 0.04);
+        --btn-border: rgba(0, 0, 0, 0.1);
+        --btn-color: #64748b;
+        --btn-hover-bg: rgba(0, 0, 0, 0.08);
+        --btn-hover-color: #0f172a;
+        --primary-bn: #0284c7;
+        --pos-bg: rgba(99, 102, 241, 0.12);
+        --pos-text: #4338ca;
+        --pos-terms: #334155;
+        --text-muted: #64748b;
+        --error-text: #dc2626;
+        --focus-ring: #0284c7;
+        --focus-glow: rgba(2, 132, 199, 0.25);
+        --arrow-bg-top: #ffffff;
+        --arrow-bg-bottom: #f8fafc;
+        --offline-bg: rgba(217, 119, 6, 0.14);
+        --offline-text: #b45309;
+        --offline-border: rgba(217, 119, 6, 0.3);
+      }
+
+      /* Auto Theme via prefers-color-scheme */
+      @media (prefers-color-scheme: light) {
+        .tooltip-card[data-theme="auto"] {
+          --bg-start: #f8fafc;
+          --bg-end: #ffffff;
+          --border-color: rgba(0, 0, 0, 0.12);
+          --shadow: 0 16px 36px -4px rgba(0, 0, 0, 0.18), 0 8px 16px -6px rgba(0, 0, 0, 0.12);
+          --text-main: #1e293b;
+          --text-original: #0f172a;
+          --divider: rgba(0, 0, 0, 0.08);
+          --btn-bg: rgba(0, 0, 0, 0.04);
+          --btn-border: rgba(0, 0, 0, 0.1);
+          --btn-color: #64748b;
+          --btn-hover-bg: rgba(0, 0, 0, 0.08);
+          --btn-hover-color: #0f172a;
+          --primary-bn: #0284c7;
+          --pos-bg: rgba(99, 102, 241, 0.12);
+          --pos-text: #4338ca;
+          --pos-terms: #334155;
+          --text-muted: #64748b;
+          --error-text: #dc2626;
+          --focus-ring: #0284c7;
+          --focus-glow: rgba(2, 132, 199, 0.25);
+          --arrow-bg-top: #ffffff;
+          --arrow-bg-bottom: #f8fafc;
+          --offline-bg: rgba(217, 119, 6, 0.14);
+          --offline-text: #b45309;
+          --offline-border: rgba(217, 119, 6, 0.3);
+        }
+      }
+
       .tooltip-card {
         pointer-events: auto;
         position: absolute;
         width: 290px;
-        background: #0f172a;
-        background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
-        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: var(--bg-end);
+        background: linear-gradient(145deg, var(--bg-start) 0%, var(--bg-end) 100%);
+        border: 1px solid var(--border-color);
         border-radius: 12px;
-        box-shadow: 0 16px 36px -4px rgba(0, 0, 0, 0.55), 0 8px 16px -6px rgba(0, 0, 0, 0.45);
-        color: #f8fafc;
+        box-shadow: var(--shadow);
+        color: var(--text-main);
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
         font-size: 13px;
         line-height: 1.4;
@@ -585,8 +793,8 @@
         position: absolute;
         width: 12px;
         height: 12px;
-        background: #1e293b;
-        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: var(--arrow-bg-bottom);
+        border: 1px solid var(--border-color);
         transform: rotate(45deg);
         z-index: -1;
       }
@@ -595,14 +803,14 @@
         bottom: -6px;
         border-top: none;
         border-left: none;
-        background: #0f172a;
+        background: var(--arrow-bg-top);
       }
 
       .tooltip-card[data-placement="bottom"] .tooltip-arrow {
         top: -6px;
         border-bottom: none;
         border-right: none;
-        background: #1e293b;
+        background: var(--arrow-bg-bottom);
       }
 
       /* Header */
@@ -612,7 +820,7 @@
         justify-content: space-between;
         gap: 8px;
         padding-bottom: 8px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        border-bottom: 1px solid var(--divider);
       }
 
       .word-group {
@@ -625,7 +833,7 @@
       .original-word {
         font-weight: 600;
         font-size: 14px;
-        color: #e2e8f0;
+        color: var(--text-original);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -639,9 +847,9 @@
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        background: rgba(245, 158, 11, 0.18);
-        color: #fbbf24;
-        border: 1px solid rgba(245, 158, 11, 0.35);
+        background: var(--offline-bg);
+        color: var(--offline-text);
+        border: 1px solid var(--offline-border);
         border-radius: 4px;
         padding: 1px 5px;
         line-height: 1.2;
@@ -655,10 +863,10 @@
       }
 
       .icon-btn {
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: var(--btn-bg);
+        border: 1px solid var(--btn-border);
         border-radius: 6px;
-        color: #94a3b8;
+        color: var(--btn-color);
         cursor: pointer;
         display: inline-flex;
         align-items: center;
@@ -670,8 +878,14 @@
       }
 
       .icon-btn:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.15);
-        color: #ffffff;
+        background: var(--btn-hover-bg);
+        color: var(--btn-hover-color);
+      }
+
+      .icon-btn:focus-visible {
+        outline: 2px solid var(--focus-ring);
+        outline-offset: 2px;
+        box-shadow: 0 0 0 4px var(--focus-glow);
       }
 
       .icon-btn:disabled {
@@ -680,7 +894,7 @@
       }
 
       .icon-btn.playing {
-        color: #38bdf8;
+        color: var(--primary-bn);
         background: rgba(56, 189, 248, 0.18);
         border-color: rgba(56, 189, 248, 0.4);
       }
@@ -706,7 +920,7 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        color: #94a3b8;
+        color: var(--text-muted);
         font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, sans-serif;
         font-size: 14px;
         padding: 6px 0;
@@ -737,7 +951,7 @@
         font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, 'SolaimanLipi', 'Vrinda', sans-serif;
         font-size: 20px;
         font-weight: 700;
-        color: #38bdf8;
+        color: var(--primary-bn);
         letter-spacing: 0.2px;
         word-break: break-word;
       }
@@ -750,7 +964,7 @@
       .dict-group {
         margin-top: 8px;
         padding-top: 8px;
-        border-top: 1px dashed rgba(255, 255, 255, 0.08);
+        border-top: 1px dashed var(--divider);
       }
 
       .pos-tag {
@@ -759,8 +973,8 @@
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        background: rgba(99, 102, 241, 0.18);
-        color: #a5b4fc;
+        background: var(--pos-bg);
+        color: var(--pos-text);
         border-radius: 4px;
         padding: 1px 5px;
         margin-bottom: 4px;
@@ -769,22 +983,39 @@
       .pos-terms {
         font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, 'SolaimanLipi', 'Vrinda', sans-serif;
         font-size: 13px;
-        color: #cbd5e1;
+        color: var(--pos-terms);
         line-height: 1.5;
         word-break: break-word;
       }
 
       /* Error State */
       .error-state {
-        color: #f87171;
+        color: var(--error-text);
         font-size: 13px;
         font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Segoe UI', Arial, sans-serif;
         padding: 4px 0;
+      }
+
+      /* Accessibility: Disable animations and transitions when reduced motion is preferred */
+      @media (prefers-reduced-motion: reduce) {
+        .tooltip-card,
+        .icon-btn,
+        .spinner {
+          animation: none !important;
+          transition: none !important;
+        }
       }
     `;
 
     const card = document.createElement('div');
     card.className = 'tooltip-card';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'false');
+    card.setAttribute('aria-label', `English to Bangla translation for "${word}"`);
+
+    // Apply active theme (dark / light / auto)
+    const activeTheme = currentSettings.theme || 'dark';
+    card.setAttribute('data-theme', activeTheme);
 
     card.innerHTML = `
       <div class="tooltip-arrow"></div>
@@ -793,17 +1024,17 @@
           <span class="original-word" title="${escapeHtml(word)}">${escapeHtml(word)}</span>
         </div>
         <div class="header-actions">
-          <button class="icon-btn btn-speak btn-speak-en" title="উচ্চারণ শুনুন (English)" aria-label="Pronounce English word">
+          <button class="icon-btn btn-speak btn-speak-en" title="উচ্চারণ শুনুন (English)" aria-label="উচ্চারণ শুনুন (English)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
               <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
             </svg>
           </button>
-          <button class="icon-btn btn-copy" title="কপি করুন" style="display: none;">
+          <button class="icon-btn btn-copy" title="কপি করুন" aria-label="অনুবাদ কপি করুন" style="display: none;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
               <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </button>
-          <button class="icon-btn close-btn" title="বন্ধ করুন">
+          <button class="icon-btn close-btn" title="বন্ধ করুন" aria-label="উইন্ডো বন্ধ করুন">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-svg">
               <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -907,7 +1138,7 @@
             : 'বাংলা উচ্চারণ শুনুন';
           const bnBtnAriaLabel = bnBtnDisabled
             ? 'No Bangla voice installed on this device.'
-            : 'Pronounce Bangla translation';
+            : 'বাংলা উচ্চারণ শুনুন';
 
           body.innerHTML = `
             <div class="bangla-result-row">
