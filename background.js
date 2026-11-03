@@ -2,7 +2,7 @@
  * Background Service Worker
  * Handles translation API calls (bypassing webpage CORS/CSP restrictions),
  * in-memory and persistent caching, lemmatization, offline dictionary fallbacks,
- * and persistence of recent lookups.
+ * official Google Cloud Translation API v2 integration, and persistence of recent lookups.
  */
 
 try {
@@ -92,6 +92,41 @@ async function setPersistentCachedTranslation(text, data) {
 }
 
 /**
+ * Executes a fetch request with exponential backoff on HTTP 429 and 5xx responses.
+ * @param {string} url - Target URL.
+ * @param {RequestInit} [options={}] - Standard fetch options.
+ * @param {number} [maxRetries=2] - Maximum retries before throwing.
+ * @returns {Promise<Response>}
+ */
+async function fetchWithBackoff(url, options = {}, maxRetries = 2) {
+  let attempt = 0;
+  let delay = 500;
+
+  while (true) {
+    try {
+      const response = await fetch(url, options);
+
+      if ((response.status === 429 || (response.status >= 500 && response.status < 600)) && attempt < maxRetries) {
+        attempt++;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay *= 2;
+        continue;
+      }
+
+      return response;
+    } catch (networkError) {
+      if (attempt < maxRetries) {
+        attempt++;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay *= 2;
+        continue;
+      }
+      throw networkError;
+    }
+  }
+}
+
+/**
  * Lazily loads and parses data/dictionary.json into memory.
  * @returns {Promise<object|null>}
  */
@@ -112,91 +147,115 @@ async function getOfflineDictionary() {
 }
 
 /**
- * Looks up a word or short phrase in the offline dictionary with lemmatization fallbacks.
+ * Translates a word using the local offline dictionary and morphological lemmatization.
  * @param {string} text
- * @returns {Promise<object|null>}
+ * @returns {Promise<object>} Standard translation result object.
  */
-async function lookupOfflineDictionary(text) {
-  try {
-    const dict = await getOfflineDictionary();
-    if (!dict) return null;
-
-    const candidates = typeof lemmatize === 'function'
-      ? lemmatize(text)
-      : [text.toLowerCase().trim()];
-
-    let match = null;
-    let matchedWord = '';
-
-    for (const candidate of candidates) {
-      if (dict[candidate]) {
-        match = dict[candidate];
-        matchedWord = candidate;
-        break;
-      }
-    }
-
-    if (!match) return null;
-
-    const primary = Array.isArray(match.bn) && match.bn.length > 0 ? match.bn[0] : '';
-    if (!primary) return null;
-
-    const dictionary = [];
-    if (Array.isArray(match.pos) && Array.isArray(match.bn) && match.bn.length > 0) {
-      dictionary.push({
-        pos: match.pos.join(', '),
-        terms: match.bn.slice(0, 5)
-      });
-    }
-
-    return {
-      originalText: text,
-      primary: primary,
-      dictionary: dictionary,
-      sourceLang: 'en',
-      provider: 'offline',
-      source: 'offline',
-      matchedWord: matchedWord
-    };
-  } catch (err) {
-    console.error('Offline lookup error:', err);
-    return null;
+async function translateOffline(text) {
+  const dict = await getOfflineDictionary();
+  if (!dict) {
+    throw new Error('অফলাইন ডিকশনারি লোড করা যায়নি (Offline dictionary could not be loaded)');
   }
+
+  const candidates = typeof lemmatize === 'function'
+    ? lemmatize(text)
+    : [text.toLowerCase().trim()];
+
+  let match = null;
+  let matchedWord = '';
+
+  for (const candidate of candidates) {
+    if (dict[candidate]) {
+      match = dict[candidate];
+      matchedWord = candidate;
+      break;
+    }
+  }
+
+  if (!match) {
+    throw new Error('অফলাইন ডিকশনারিতে শব্দটি পাওয়া যায়নি (Word not found in offline dictionary)');
+  }
+
+  const primary = Array.isArray(match.bn) && match.bn.length > 0 ? match.bn[0] : '';
+  if (!primary) {
+    throw new Error('অফলাইন অনুবাদ শূন্য (Empty offline translation)');
+  }
+
+  const dictionary = [];
+  if (Array.isArray(match.pos) && Array.isArray(match.bn) && match.bn.length > 0) {
+    dictionary.push({
+      pos: match.pos.join(', '),
+      terms: match.bn.slice(0, 5)
+    });
+  }
+
+  return {
+    originalText: text,
+    primary: primary,
+    dictionary: dictionary,
+    sourceLang: 'en',
+    provider: 'offline',
+    source: 'offline',
+    matchedWord: matchedWord
+  };
 }
 
 /**
- * Persist translated word to recent words history in chrome.storage.local
- * @param {string} word
- * @param {string} translation
+ * Translates text using the official Google Cloud Translation API v2 Basic.
+ * Never logs the API key and handles specific HTTP status codes.
+ * @param {string} text - English text to translate.
+ * @param {string} apiKey - Google Cloud API key.
+ * @returns {Promise<object>} Standard translation result object.
  */
-async function saveRecentWord(word, translation) {
-  try {
-    const trimmedWord = word.trim();
-    const trimmedTranslation = translation.trim();
-    if (!trimmedWord || !trimmedTranslation) return;
-
-    // Only record single words or short phrases up to 3 words
-    const wordCount = trimmedWord.split(/\s+/).length;
-    if (wordCount > 3 || trimmedWord.length > 40) return;
-
-    const { recentWords = [] } = await chrome.storage.local.get('recentWords');
-
-    // Remove existing entry for the same word to push it to the top
-    const filtered = recentWords.filter(
-      item => item.word.toLowerCase() !== trimmedWord.toLowerCase()
-    );
-
-    filtered.unshift({
-      word: trimmedWord,
-      translation: trimmedTranslation,
-      timestamp: Date.now()
-    });
-
-    // Keep the most recent 20 in storage
-    await chrome.storage.local.set({ recentWords: filtered.slice(0, 20) });
-  } catch (error) {
-    console.error('Failed to save recent word:', error);
+async function translateOfficial(text, apiKey) {
+  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
+    throw new Error('এপিআই কী পাওয়া যায়নি (No API key provided)');
   }
+
+  const url = `https://translation.googleapis.com/language/translate/v2?key=${encodeURIComponent(apiKey.trim())}`;
+  const response = await fetchWithBackoff(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      q: text,
+      target: 'bn',
+      source: 'en',
+      format: 'text'
+    })
+  });
+
+  if (response.status === 400 || response.status === 403) {
+    throw new Error('ভুল বা অননুমোদিত এপিআই কী (Invalid or unauthorized API key)');
+  }
+
+  if (response.status === 429) {
+    throw new Error('অনুরোধ সীমা অতিক্রম করেছে, পরে চেষ্টা করুন (Rate limit / quota exceeded, please try again later)');
+  }
+
+  if (!response.ok) {
+    throw new Error(`Google Cloud Translation error: HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  const translations = data?.data?.translations;
+  const primary = Array.isArray(translations) && translations[0]?.translatedText
+    ? translations[0].translatedText.trim()
+    : '';
+
+  if (!primary) {
+    throw new Error('Google Cloud Translation returned empty translation');
+  }
+
+  return {
+    originalText: text,
+    primary: primary,
+    dictionary: [],
+    sourceLang: translations[0]?.detectedSourceLanguage || 'en',
+    provider: 'official',
+    source: 'online'
+  };
 }
 
 /**
@@ -204,16 +263,20 @@ async function saveRecentWord(word, translation) {
  * @param {string} text
  * @returns {Promise<object>}
  */
-async function translateWithGoogle(text) {
+async function translateGTX(text) {
   const encoded = encodeURIComponent(text);
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=bn&dt=t&dt=bd&q=${encoded}`;
 
-  const response = await fetch(url, {
+  const response = await fetchWithBackoff(url, {
     method: 'GET',
     headers: {
       'Accept': 'application/json, text/plain, */*'
     }
   });
+
+  if (response.status === 429) {
+    throw new Error('অনুরোধ সীমা অতিক্রম করেছে, পরে চেষ্টা করুন (Rate limit / quota exceeded, please try again later)');
+  }
 
   if (!response.ok) {
     throw new Error(`Google Translate error: HTTP ${response.status}`);
@@ -225,7 +288,7 @@ async function translateWithGoogle(text) {
   let primary = '';
   if (Array.isArray(data[0])) {
     primary = data[0]
-      .map(segment => (segment && segment[0] ? segment[0] : ''))
+      .map((segment) => (segment && segment[0] ? segment[0] : ''))
       .join('')
       .trim();
   }
@@ -258,7 +321,7 @@ async function translateWithGoogle(text) {
     primary: primary,
     dictionary: dictionary,
     sourceLang: data[2] || 'en',
-    provider: 'google',
+    provider: 'gtx',
     source: 'online'
   };
 }
@@ -268,16 +331,20 @@ async function translateWithGoogle(text) {
  * @param {string} text
  * @returns {Promise<object>}
  */
-async function translateWithMyMemory(text) {
+async function translateMyMemory(text) {
   const encoded = encodeURIComponent(text);
   const url = `https://api.mymemory.translated.net/get?q=${encoded}&langpair=en|bn`;
 
-  const response = await fetch(url, {
+  const response = await fetchWithBackoff(url, {
     method: 'GET',
     headers: {
       'Accept': 'application/json'
     }
   });
+
+  if (response.status === 429) {
+    throw new Error('অনুরোধ সীমা অতিক্রম করেছে, পরে চেষ্টা করুন (Rate limit / quota exceeded, please try again later)');
+  }
 
   if (!response.ok) {
     throw new Error(`MyMemory error: HTTP ${response.status}`);
@@ -294,8 +361,8 @@ async function translateWithMyMemory(text) {
   const alternatives = [];
   if (Array.isArray(data.matches)) {
     const rawTerms = data.matches
-      .map(m => (m && m.translation ? m.translation.trim() : ''))
-      .filter(t => t && t.toLowerCase() !== primary.toLowerCase());
+      .map((m) => (m && m.translation ? m.translation.trim() : ''))
+      .filter((t) => t && t.toLowerCase() !== primary.toLowerCase());
 
     const terms = [...new Set(rawTerms)].slice(0, 4);
     if (terms.length > 0) {
@@ -317,11 +384,43 @@ async function translateWithMyMemory(text) {
 }
 
 /**
- * Unified Translation Handler with Lookup Order:
+ * Persist translated word to recent words history in chrome.storage.local
+ * @param {string} word
+ * @param {string} translation
+ */
+async function saveRecentWord(word, translation) {
+  try {
+    const trimmedWord = word.trim();
+    const trimmedTranslation = translation.trim();
+    if (!trimmedWord || !trimmedTranslation) return;
+
+    // Only record single words or short phrases up to 3 words
+    const wordCount = trimmedWord.split(/\s+/).length;
+    if (wordCount > 3 || trimmedWord.length > 40) return;
+
+    const { recentWords = [] } = await chrome.storage.local.get('recentWords');
+
+    const filtered = recentWords.filter(
+      (item) => item.word.toLowerCase() !== trimmedWord.toLowerCase()
+    );
+
+    filtered.unshift({
+      word: trimmedWord,
+      translation: trimmedTranslation,
+      timestamp: Date.now()
+    });
+
+    await chrome.storage.local.set({ recentWords: filtered.slice(0, 20) });
+  } catch (error) {
+    console.error('Failed to save recent word:', error);
+  }
+}
+
+/**
+ * Unified Translation Handler executing according to providerOrder:
  * 1. Memory cache
  * 2. Persistent storage cache ('tcache', max 1000)
- * 3. Online API (if navigator.onLine)
- * 4. Offline dictionary (fallback or immediate if offline)
+ * 3. Provider Order execution (official -> gtx -> mymemory -> offline)
  *
  * @param {string} text
  * @param {boolean} isDoubleClick
@@ -352,12 +451,13 @@ async function handleTranslation(text, isDoubleClick = false) {
     return { ...persistentCached, source: 'cache', fromCache: true };
   }
 
-  // Check network connectivity
+  // Load configured settings for providerOrder, apiKey, and offlineEnabled
+  const settings = typeof getSettings === 'function' ? await getSettings() : DEFAULT_SETTINGS;
   const isOnline = typeof navigator !== 'undefined' ? navigator.onLine !== false : true;
 
-  // 3. If offline, skip straight to offline dictionary
+  // 3. If browser is offline, route directly to offline dictionary
   if (!isOnline) {
-    const offlineResult = await lookupOfflineDictionary(trimmed);
+    const offlineResult = await translateOffline(trimmed);
     if (offlineResult) {
       setCachedTranslation(trimmed, offlineResult);
       if (isDoubleClick) {
@@ -365,45 +465,61 @@ async function handleTranslation(text, isDoubleClick = false) {
       }
       return offlineResult;
     }
-    throw new Error('অফলাইন ডিকশনারিতে শব্দটি পাওয়া যায়নি এবং ইন্টারনেট সংযোগ নেই।');
+    throw new Error('ইন্টারনেট সংযোগ নেই এবং অফলাইন ডিকশনারিতে শব্দটি পাওয়া যায়নি (No internet connection and word not found offline)');
   }
 
-  // 4. Online API execution (Google GTX -> MyMemory)
-  let result = null;
-  try {
-    result = await translateWithGoogle(trimmed);
-  } catch (primaryError) {
-    console.warn('Primary translation API failed, attempting fallback:', primaryError);
+  // 4. Run providers in user-specified priority order
+  const providerOrder = Array.isArray(settings.providerOrder) && settings.providerOrder.length > 0
+    ? settings.providerOrder
+    : ['official', 'gtx', 'mymemory', 'offline'];
+
+  let lastError = null;
+
+  for (const provider of providerOrder) {
     try {
-      result = await translateWithMyMemory(trimmed);
-    } catch (fallbackError) {
-      console.warn('Online translation providers failed, attempting offline dictionary:', fallbackError);
+      let result = null;
+
+      if (provider === 'official') {
+        if (!settings.apiKey || !settings.apiKey.trim()) {
+          // Skip official provider if no key configured
+          continue;
+        }
+        result = await translateOfficial(trimmed, settings.apiKey.trim());
+      } else if (provider === 'gtx') {
+        result = await translateGTX(trimmed);
+      } else if (provider === 'mymemory') {
+        result = await translateMyMemory(trimmed);
+      } else if (provider === 'offline') {
+        if (settings.offlineEnabled !== false) {
+          result = await translateOffline(trimmed);
+        }
+      }
+
+      if (result && result.primary) {
+        setCachedTranslation(trimmed, result);
+
+        // Store in persistent cache if from an online provider
+        if (result.source === 'online') {
+          await setPersistentCachedTranslation(trimmed, result);
+        }
+
+        if (isDoubleClick) {
+          await saveRecentWord(trimmed, result.primary);
+        }
+        return result;
+      }
+    } catch (err) {
+      lastError = err;
+      console.warn(`Provider [${provider}] failed, continuing to next fallback:`, err.message);
     }
   }
 
-  // 5. If online succeeded, persist and return
-  if (result) {
-    result.source = 'online';
-    setCachedTranslation(trimmed, result);
-    await setPersistentCachedTranslation(trimmed, result);
-
-    if (isDoubleClick) {
-      await saveRecentWord(trimmed, result.primary);
-    }
-    return result;
+  // If all providers failed, throw friendly error
+  if (lastError) {
+    throw lastError;
   }
 
-  // 6. Online failed: fallback to offline dictionary
-  const offlineFallback = await lookupOfflineDictionary(trimmed);
-  if (offlineFallback) {
-    setCachedTranslation(trimmed, offlineFallback);
-    if (isDoubleClick) {
-      await saveRecentWord(trimmed, offlineFallback.primary);
-    }
-    return offlineFallback;
-  }
-
-  throw new Error('অনুবাদ পাওয়া যায়নি। অনুগ্রহ করে আপনার ইন্টারনেট সংযোগ পরীক্ষা করুন।');
+  throw new Error('অনুবাদ পাওয়া যায়নি। অনুগ্রহ করে আপনার ইন্টারনেট সংযোগ পরীক্ষা করুন (Translation unavailable)');
 }
 
 // Runtime message listener
@@ -431,6 +547,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+
+  if (message.action === 'TEST_API_KEY') {
+    (async () => {
+      try {
+        const testKey = (message.apiKey || '').trim();
+        if (!testKey) {
+          sendResponse({ success: false, error: 'এপিআই কী খালি (API key is empty)' });
+          return;
+        }
+        const result = await translateOfficial('hello', testKey);
+        sendResponse({ success: true, translated: result.primary });
+      } catch (error) {
+        sendResponse({ success: false, error: error.message || 'API key test failed' });
+      }
+    })();
+    return true;
+  }
 });
 
 // Extension installation initialization and migration
@@ -438,22 +571,18 @@ chrome.runtime.onInstalled.addListener(async () => {
   try {
     const data = await chrome.storage.local.get(['enabled', 'recentWords', 'settings', 'tcache']);
 
-    // Preserve existing enabled state or set default
     if (data.enabled === undefined) {
       await chrome.storage.local.set({ enabled: true });
     }
 
-    // Preserve existing recentWords or initialize empty array
     if (!Array.isArray(data.recentWords)) {
       await chrome.storage.local.set({ recentWords: [] });
     }
 
-    // Preserve existing tcache or initialize empty object
     if (!data.tcache || typeof data.tcache !== 'object') {
       await chrome.storage.local.set({ tcache: {} });
     }
 
-    // Migration / initialization for settings
     if (typeof getSettings === 'function') {
       const initializedSettings = await getSettings();
       await chrome.storage.local.set({ settings: initializedSettings });

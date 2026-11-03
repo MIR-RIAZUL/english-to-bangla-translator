@@ -113,13 +113,13 @@
           </div>
 
           <!-- Official API Key -->
-          <div class="setting-item">
+          <div class="setting-item vertical-layout">
             <div class="setting-label-col">
               <label for="apiKey" class="setting-title">Google Cloud API Key</label>
-              <span class="setting-hint">Optional official key for high-volume Translation API v2</span>
+              <span class="setting-hint">Optional official key for Google Cloud Translation API v2 Basic</span>
             </div>
-            <div class="setting-control-col api-key-control">
-              <div class="input-with-button">
+            <div class="api-key-control-row">
+              <div class="input-with-button api-key-input-wrap">
                 <input type="password" id="apiKey" placeholder="AIzaSy..." class="form-input">
                 <button type="button" id="toggleApiKeyVisibility" class="icon-toggle-btn" title="Show/Hide API Key">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-icon">
@@ -128,7 +128,11 @@
                   </svg>
                 </button>
               </div>
+              <button type="button" id="testApiKeyBtn" class="btn btn-secondary btn-sm" title="Test this API Key">
+                Test Key
+              </button>
             </div>
+            <div id="apiKeyTestResult" class="api-key-feedback" style="display: none;"></div>
           </div>
 
           <!-- Offline Mode Toggle -->
@@ -267,4 +271,3 @@
   <script src="options.js"></script>
 </body>
 </html>
-

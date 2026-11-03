@@ -321,9 +321,16 @@ body {
   border-radius: 6px;
 }
 
-/* API Key Input Container */
-.api-key-control {
-  min-width: 240px;
+/* API Key Input Container & Row */
+.api-key-control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.api-key-input-wrap {
+  flex: 1;
 }
 
 .input-with-button {
@@ -354,6 +361,32 @@ body {
 
 .icon-toggle-btn:hover {
   color: #ffffff;
+}
+
+.api-key-feedback {
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.api-key-feedback.success {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.api-key-feedback.error {
+  background: rgba(244, 63, 94, 0.15);
+  color: #fda4af;
+  border: 1px solid rgba(244, 63, 94, 0.3);
+}
+
+.api-key-feedback.loading {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.3);
 }
 
 /* Provider Order List */
@@ -508,8 +541,9 @@ input:checked + .slider:before {
 
 .btn-sm {
   font-size: 11.5px;
-  padding: 5px 9px;
+  padding: 6px 12px;
   border-radius: 6px;
+  white-space: nowrap;
 }
 
 .btn-secondary {
@@ -518,9 +552,14 @@ input:checked + .slider:before {
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.15);
   color: #ffffff;
+}
+
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .btn-danger {

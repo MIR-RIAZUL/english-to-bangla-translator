@@ -1,6 +1,7 @@
 /**
  * Options Page Controller
- * Manages reading, displaying, modifying, and resetting extension settings.
+ * Manages reading, displaying, modifying, testing API credentials,
+ * and resetting extension settings.
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -14,6 +15,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const providerOrderList = document.getElementById('providerOrderList');
   const apiKeyInput = document.getElementById('apiKey');
   const toggleApiKeyBtn = document.getElementById('toggleApiKeyVisibility');
+  const testApiKeyBtn = document.getElementById('testApiKeyBtn');
+  const apiKeyTestResult = document.getElementById('apiKeyTestResult');
   const offlineEnabledCheckbox = document.getElementById('offlineEnabled');
 
   const speechRateInput = document.getElementById('speechRate');
@@ -34,7 +37,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let saveTimeout = null;
 
   const PROVIDER_METADATA = {
-    official: { name: 'Official Google Translate', desc: 'Official Cloud Translation API v2 (Requires API key)' },
+    official: { name: 'Official Google Translate', desc: 'Google Cloud Translation API v2 Basic (Requires API key)' },
     gtx: { name: 'Google GTX Endpoint', desc: 'Direct web translation engine with full dictionary breakdowns' },
     mymemory: { name: 'MyMemory API', desc: 'Public translation memory with alternative suggestions' },
     offline: { name: 'Offline Dictionary', desc: 'Fast local dictionary lookup when network is unavailable' }
@@ -117,7 +120,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       providerOrderList.appendChild(row);
     });
 
-    // Attach click listeners for move buttons
     const upButtons = providerOrderList.querySelectorAll('.btn-move-up');
     const downButtons = providerOrderList.querySelectorAll('.btn-move-down');
 
@@ -224,6 +226,54 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   /**
+   * Tests the entered API key against the background service worker.
+   */
+  function testApiKey() {
+    if (!apiKeyInput || !testApiKeyBtn || !apiKeyTestResult) return;
+
+    const key = apiKeyInput.value.trim();
+    if (!key) {
+      apiKeyTestResult.className = 'api-key-feedback error';
+      apiKeyTestResult.textContent = 'অনুগ্রহ করে প্রথমে একটি এপিআই কী লিখুন (Please enter an API key first)';
+      apiKeyTestResult.style.display = 'block';
+      return;
+    }
+
+    testApiKeyBtn.disabled = true;
+    testApiKeyBtn.textContent = 'Testing...';
+    apiKeyTestResult.className = 'api-key-feedback loading';
+    apiKeyTestResult.textContent = 'এপিআই কী যাচাই করা হচ্ছে (Verifying API key...)...';
+    apiKeyTestResult.style.display = 'block';
+
+    try {
+      chrome.runtime.sendMessage(
+        {
+          action: 'TEST_API_KEY',
+          apiKey: key
+        },
+        (response) => {
+          testApiKeyBtn.disabled = false;
+          testApiKeyBtn.textContent = 'Test Key';
+
+          if (response && response.success) {
+            apiKeyTestResult.className = 'api-key-feedback success';
+            apiKeyTestResult.textContent = `✓ বৈধ এপিআই কী! পরীক্ষা সফল: "hello" ➔ "${escapeHtml(response.translated)}" (Valid API key)`;
+          } else {
+            const err = response?.error || 'যাচাই ব্যর্থ হয়েছে (Verification failed)';
+            apiKeyTestResult.className = 'api-key-feedback error';
+            apiKeyTestResult.textContent = `✗ ত্রুটি: ${escapeHtml(err)}`;
+          }
+        }
+      );
+    } catch (err) {
+      testApiKeyBtn.disabled = false;
+      testApiKeyBtn.textContent = 'Test Key';
+      apiKeyTestResult.className = 'api-key-feedback error';
+      apiKeyTestResult.textContent = `✗ ত্রুটি: ${escapeHtml(err.message)}`;
+    }
+  }
+
+  /**
    * Initializes settings on page load.
    */
   async function initialize() {
@@ -294,10 +344,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         currentSettings.apiKey = val;
         await saveSettings({ apiKey: val });
         showSaveConfirmation();
+        if (apiKeyTestResult) {
+          apiKeyTestResult.style.display = 'none';
+        }
       } catch (err) {
         console.error('Save error:', err);
       }
     });
+  }
+
+  // Test API Key Button
+  if (testApiKeyBtn) {
+    testApiKeyBtn.addEventListener('click', testApiKey);
   }
 
   // Toggle API Key Masking
@@ -411,6 +469,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         await saveSettings(DEFAULT_SETTINGS);
         populateForm(DEFAULT_SETTINGS);
+        if (apiKeyTestResult) {
+          apiKeyTestResult.style.display = 'none';
+        }
         showSaveConfirmation('Defaults restored');
       } catch (err) {
         console.error('Reset error:', err);
@@ -421,4 +482,3 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initialize
   await initialize();
 });
-
