@@ -33,6 +33,21 @@ async function getSettings() {
       ? result.settings
       : {};
 
+    const cleanSettings = {};
+    for (const key of Object.keys(DEFAULT_SETTINGS)) {
+      if (key in stored) {
+        const defaultVal = DEFAULT_SETTINGS[key];
+        const val = stored[key];
+        const isSameType = Array.isArray(defaultVal)
+          ? Array.isArray(val)
+          : typeof val === typeof defaultVal && (typeof defaultVal !== 'number' || !isNaN(val));
+
+        cleanSettings[key] = isSameType ? val : defaultVal;
+      } else {
+        cleanSettings[key] = DEFAULT_SETTINGS[key];
+      }
+    }
+
     const validProviders = ['official', 'gtx', 'mymemory', 'offline'];
     let providerOrder = Array.isArray(stored.providerOrder) && stored.providerOrder.length > 0
       ? stored.providerOrder.filter((p) => validProviders.includes(p))
@@ -44,11 +59,8 @@ async function getSettings() {
       }
     });
 
-    return {
-      ...DEFAULT_SETTINGS,
-      ...stored,
-      providerOrder: providerOrder
-    };
+    cleanSettings.providerOrder = providerOrder;
+    return cleanSettings;
   } catch (error) {
     console.error('Failed to get settings:', error);
     return { ...DEFAULT_SETTINGS };
@@ -63,9 +75,24 @@ async function getSettings() {
 async function saveSettings(partialSettings) {
   try {
     const current = await getSettings();
+    const safePartial = {};
+    if (partialSettings && typeof partialSettings === 'object') {
+      for (const key of Object.keys(DEFAULT_SETTINGS)) {
+        if (key in partialSettings) {
+          const defaultVal = DEFAULT_SETTINGS[key];
+          const val = partialSettings[key];
+          const isSameType = Array.isArray(defaultVal)
+            ? Array.isArray(val)
+            : typeof val === typeof defaultVal && (typeof defaultVal !== 'number' || !isNaN(val));
+          if (isSameType) {
+            safePartial[key] = val;
+          }
+        }
+      }
+    }
     const updated = {
       ...current,
-      ...(partialSettings || {})
+      ...safePartial
     };
     await chrome.storage.local.set({ settings: updated });
     return updated;

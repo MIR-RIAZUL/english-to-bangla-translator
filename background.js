@@ -170,7 +170,46 @@ async function fetchWithBackoff(url, options = {}, retries = 2, delay = 600) {
 }
 
 /**
+ * Creates a chunk object containing text and trailing separator.
+ * Implements toString() and length for backwards compatibility.
+ * @param {string} text
+ * @param {string} [sep='']
+ * @returns {{ text: string, sep: string, length: number, toString: Function }}
+ */
+function createChunk(text, sep = '') {
+  const trimmed = text.trim();
+  return {
+    text: trimmed,
+    sep: sep || '',
+    length: trimmed.length,
+    toString() { return this.text; }
+  };
+}
+
+/**
+ * Rebuilds the final translation by joining each translated chunk with its original separator.
+ * Uses a single space if separator is empty or a plain space, preserving blank lines and newlines.
+ * @param {Array<{ translation: string, sep?: string }>} parts
+ * @returns {string} Reconstructed full translation text.
+ */
+function joinTranslatedChunks(parts) {
+  if (!parts || parts.length === 0) return '';
+  let result = '';
+  for (let i = 0; i < parts.length; i++) {
+    const item = parts[i];
+    const trans = item && item.translation ? item.translation : (typeof item === 'string' ? item : '');
+    const sep = item && item.sep ? item.sep : '';
+    result += trans;
+    if (i < parts.length - 1) {
+      result += (sep && sep.includes('\n')) ? sep : ' ';
+    }
+  }
+  return result.trim();
+}
+
+/**
  * Splits text into chunks at sentence boundaries (. ! ? \n) without exceeding maxLen.
+ * Captures the original separator (whitespace or newline) that followed each chunk.
  * If a single sentence exceeds maxLen, it is split further in order of preference:
  * 1) at the last comma/semicolon/colon before maxLen,
  * 2) else at the last space before maxLen,
@@ -178,15 +217,13 @@ async function fetchWithBackoff(url, options = {}, retries = 2, delay = 600) {
  * Never produces a chunk longer than maxLen and never drops characters.
  * @param {string} text
  * @param {number} maxLen
- * @returns {string[]}
+ * @returns {Array<{ text: string, sep: string, length: number, toString: Function }>}
  */
 function splitAtSentenceBoundaries(text, maxLen) {
   if (!text || typeof text !== 'string') return [];
-  if (text.length <= maxLen) return [text.trim()];
-
-  // Split on sentence-ending punctuation followed by whitespace, or newlines
-  const sentencePattern = /(?<=[.!?\n])\s+/;
-  const rawSentences = text.split(sentencePattern).filter(Boolean);
+  if (text.length <= maxLen && !text.includes('\n')) {
+    return [createChunk(text, '')];
+  }
 
   // Subdivide any individual sentence that exceeds maxLen
   function splitOversized(str, limit) {
@@ -227,35 +264,56 @@ function splitAtSentenceBoundaries(text, maxLen) {
     return parts;
   }
 
-  const sentences = [];
-  for (const raw of rawSentences) {
-    if (raw.length <= maxLen) {
-      sentences.push(raw);
+  // Capture sentences and following whitespace/newline delimiters
+  const pattern = /((?<=[.!?\n])\s+)/;
+  const raw = text.split(pattern);
+  const items = [];
+  for (let i = 0; i < raw.length; i += 2) {
+    const rawSentence = raw[i];
+    const rawSep = raw[i + 1] || '';
+    if (!rawSentence && !rawSep) continue;
+
+    if (rawSentence.length > maxLen) {
+      const sub = splitOversized(rawSentence, maxLen);
+      for (let sIdx = 0; sIdx < sub.length; sIdx++) {
+        items.push({
+          text: sub[sIdx],
+          sep: sIdx === sub.length - 1 ? rawSep : ''
+        });
+      }
     } else {
-      sentences.push(...splitOversized(raw, maxLen));
+      items.push({ text: rawSentence, sep: rawSep });
     }
   }
 
   const chunks = [];
-  let current = '';
+  let currentText = '';
+  let currentSep = '';
 
-  for (const sentence of sentences) {
-    const candidate = current ? current + ' ' + sentence : sentence;
-    if (candidate.length <= maxLen) {
-      current = candidate;
+  for (const item of items) {
+    const sentenceText = item.text.trim();
+    if (!sentenceText) continue;
+
+    const hasNewlineBreak = currentSep.includes('\n');
+    const candidate = currentText ? currentText + ' ' + sentenceText : sentenceText;
+
+    if (!hasNewlineBreak && candidate.length <= maxLen) {
+      currentText = candidate;
+      currentSep = item.sep;
     } else {
-      if (current) {
-        chunks.push(current.trim());
+      if (currentText) {
+        chunks.push(createChunk(currentText, currentSep));
       }
-      current = sentence;
+      currentText = sentenceText;
+      currentSep = item.sep;
     }
   }
 
-  if (current.trim()) {
-    chunks.push(current.trim());
+  if (currentText) {
+    chunks.push(createChunk(currentText, currentSep));
   }
 
-  return chunks.length > 0 ? chunks : [text];
+  return chunks.length > 0 ? chunks : [createChunk(text, '')];
 }
 
 /**
@@ -362,14 +420,18 @@ async function translateGTXChunk(chunk, mode) {
 async function translateGTX(text, mode = 'word') {
   const GTX_CHUNK_MAX = 1500;
 
-  if (mode === 'sentence' && text.length > GTX_CHUNK_MAX) {
+  if (mode === 'sentence' && (text.length > GTX_CHUNK_MAX || text.includes('\n'))) {
     const chunks = splitAtSentenceBoundaries(text, GTX_CHUNK_MAX);
     const parts = [];
     for (const chunk of chunks) {
-      const { primary } = await translateGTXChunk(chunk, 'sentence');
-      parts.push(primary);
+      const chunkText = typeof chunk === 'string' ? chunk : (chunk.text || String(chunk));
+      const { primary } = await translateGTXChunk(chunkText, 'sentence');
+      parts.push({
+        translation: primary,
+        sep: typeof chunk === 'object' && chunk.sep ? chunk.sep : ' '
+      });
     }
-    const joined = parts.join(' ').trim();
+    const joined = joinTranslatedChunks(parts);
     if (!joined) throw new Error('Google GTX returned empty translation');
     return {
       originalText: text,
@@ -469,6 +531,8 @@ async function translateOffline(text, mode = 'word') {
  * Provider 4: MyMemory Translation API Fallback.
  * Enforces 450-character chunks (MyMemory limit is ~500 chars).
  * Joins translated chunks with a space for sentence mode.
+ * On HTTP 429, immediately throws a quota exceeded error without retrying backoff
+ * so the provider chain continues to the next provider.
  * @param {string} text
  * @param {"word"|"sentence"} [mode="word"]
  * @returns {Promise<object>} Unified result object.
@@ -477,30 +541,47 @@ async function translateMyMemory(text, mode = 'word') {
   const MM_CHUNK_MAX = 450;
 
   /**
+   * Fetches from MyMemory without retrying 429 with backoff.
+   * @param {string} url
+   * @returns {Promise<Response>}
+   */
+  async function fetchMyMemory(url) {
+    const response = await fetch(url);
+    if (response.status === 429) {
+      throw new Error('MyMemory daily quota exceeded, trying next provider.');
+    }
+    if (!response.ok) {
+      throw new Error(`MyMemory error: HTTP ${response.status}`);
+    }
+    return response;
+  }
+
+  /**
    * Translates a single chunk against MyMemory API.
    * @param {string} chunk
    * @returns {Promise<string>} Translated text.
    */
   async function translateMMChunk(chunk) {
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk)}&langpair=en|bn`;
-    const response = await fetchWithBackoff(url);
-    if (!response.ok) {
-      throw new Error(`MyMemory error: HTTP ${response.status}`);
-    }
+    const response = await fetchMyMemory(url);
     const data = await response.json();
     const primary = data?.responseData?.translatedText?.trim();
     if (!primary) throw new Error('MyMemory returned empty translation');
     return primary;
   }
 
-  if (text.length > MM_CHUNK_MAX) {
+  if (text.length > MM_CHUNK_MAX || (mode === 'sentence' && text.includes('\n'))) {
     const chunks = splitAtSentenceBoundaries(text, MM_CHUNK_MAX);
     const parts = [];
     for (const chunk of chunks) {
-      const translated = await translateMMChunk(chunk);
-      parts.push(translated);
+      const chunkText = typeof chunk === 'string' ? chunk : (chunk.text || String(chunk));
+      const translated = await translateMMChunk(chunkText);
+      parts.push({
+        translation: translated,
+        sep: typeof chunk === 'object' && chunk.sep ? chunk.sep : ' '
+      });
     }
-    const joined = parts.join(' ').trim();
+    const joined = joinTranslatedChunks(parts);
     if (!joined) throw new Error('MyMemory returned empty translation');
     return {
       originalText: text,
@@ -514,10 +595,7 @@ async function translateMyMemory(text, mode = 'word') {
 
   // Short text — single request with optional alternatives
   const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|bn`;
-  const response = await fetchWithBackoff(url);
-  if (!response.ok) {
-    throw new Error(`MyMemory error: HTTP ${response.status}`);
-  }
+  const response = await fetchMyMemory(url);
   const data = await response.json();
   const primary = data?.responseData?.translatedText?.trim();
   if (!primary) throw new Error('MyMemory returned empty translation');
@@ -561,73 +639,81 @@ function normalizeHistoryItem(item) {
   };
 }
 
+// Promise-chain queue to serialize storage writes and prevent history race conditions
+let historyQueue = Promise.resolve();
+function enqueueHistoryWrite(task) {
+  historyQueue = historyQueue.then(task, task);
+  return historyQueue;
+}
+
 /**
  * Persist a translated word or sentence to recent words history in chrome.storage.local.
  * Sentences are only saved when settings.saveSentences is true, marked with type "sentence".
  * Truncated to 120 characters in storage.
+ * Serialized via enqueueHistoryWrite so concurrent writes do not drop entries.
  * @param {string} word
  * @param {string} translation
  * @param {"word"|"sentence"} [mode="word"]
  */
 async function saveRecentWord(word, translation, mode = 'word') {
-  try {
-    const trimmedWord = word.trim();
-    const trimmedTranslation = translation.trim();
-    if (!trimmedWord || !trimmedTranslation) return;
+  return enqueueHistoryWrite(async () => {
+    try {
+      const trimmedWord = word.trim();
+      const trimmedTranslation = translation.trim();
+      if (!trimmedWord || !trimmedTranslation) return;
 
-    const data = await chrome.storage.local.get(['recentWords', 'settings']);
-    const settings = (data.settings && typeof data.settings === 'object') ? data.settings : {};
+      const data = await chrome.storage.local.get(['recentWords', 'settings']);
+      const settings = (data.settings && typeof data.settings === 'object') ? data.settings : {};
 
-    if (mode === 'sentence') {
-      if (!settings.saveSentences) return; // Do not save sentences unless opted in
-    } else {
-      // Word mode validation
-      const wordCount = trimmedWord.split(/\s+/).length;
-      if (wordCount > 3 || trimmedWord.length > 40) return;
+      if (mode === 'sentence') {
+        if (!settings.saveSentences) return; // Do not save sentences unless opted in
+      } else {
+        // Word mode validation
+        const wordCount = trimmedWord.split(/\s+/).length;
+        if (wordCount > 3 || trimmedWord.length > 40) return;
+      }
+
+      const rawList = Array.isArray(data.recentWords) ? data.recentWords : [];
+      const historyLimit = Math.max(10, Number(settings.historyLimit) || 200);
+
+      const history = rawList.map(normalizeHistoryItem);
+
+      // For sentences, store truncated to 120 chars
+      const storedWord = mode === 'sentence' && trimmedWord.length > 120
+        ? trimmedWord.slice(0, 120) + '…'
+        : trimmedWord;
+
+      const wordLower = storedWord.toLowerCase();
+      const existingIndex = history.findIndex((item) => item.word.toLowerCase() === wordLower);
+
+      let updatedEntry;
+      if (existingIndex !== -1) {
+        const existing = history[existingIndex];
+        updatedEntry = {
+          word: storedWord,
+          translation: trimmedTranslation,
+          timestamp: Date.now(),
+          count: (existing.count || 1) + 1,
+          type: mode
+        };
+        history.splice(existingIndex, 1);
+      } else {
+        updatedEntry = {
+          word: storedWord,
+          translation: trimmedTranslation,
+          timestamp: Date.now(),
+          count: 1,
+          type: mode
+        };
+      }
+
+      history.unshift(updatedEntry);
+      const trimmedHistory = history.slice(0, historyLimit);
+      await chrome.storage.local.set({ recentWords: trimmedHistory });
+    } catch (error) {
+      console.error('Failed to save recent word/sentence:', error);
     }
-
-    const rawList = Array.isArray(data.recentWords) ? data.recentWords : [];
-    const historyLimit = typeof settings.historyLimit === 'number' && settings.historyLimit >= 10
-      ? settings.historyLimit
-      : 200;
-
-    const history = rawList.map(normalizeHistoryItem);
-
-    // For sentences, store truncated to 120 chars
-    const storedWord = mode === 'sentence' && trimmedWord.length > 120
-      ? trimmedWord.slice(0, 120) + '…'
-      : trimmedWord;
-
-    const wordLower = storedWord.toLowerCase();
-    const existingIndex = history.findIndex((item) => item.word.toLowerCase() === wordLower);
-
-    let updatedEntry;
-    if (existingIndex !== -1) {
-      const existing = history[existingIndex];
-      updatedEntry = {
-        word: storedWord,
-        translation: trimmedTranslation,
-        timestamp: Date.now(),
-        count: (existing.count || 1) + 1,
-        type: mode
-      };
-      history.splice(existingIndex, 1);
-    } else {
-      updatedEntry = {
-        word: storedWord,
-        translation: trimmedTranslation,
-        timestamp: Date.now(),
-        count: 1,
-        type: mode
-      };
-    }
-
-    history.unshift(updatedEntry);
-    const trimmedHistory = history.slice(0, historyLimit);
-    await chrome.storage.local.set({ recentWords: trimmedHistory });
-  } catch (error) {
-    console.error('Failed to save recent word/sentence:', error);
-  }
+  });
 }
 
 /**

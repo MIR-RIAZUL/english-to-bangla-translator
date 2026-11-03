@@ -22,11 +22,13 @@
 
 --- Suite 3: Chunking & Boundary Splitting ---
   [PASS] 3.1: 4000-char multi-sentence text splits into multiple chunks (3 chunks)
-  [PASS] 3.2: No chunk exceeds GTX 1500 char limit (max: 1478)
-  [PASS] 3.3: No chunk exceeds MyMemory 450 char limit (max: 437)
+  [PASS] 3.2: No chunk exceeds GTX 1500 char limit (max: 1498)
+  [PASS] 3.3: No chunk exceeds MyMemory 450 char limit (max: 424)
   [PASS] 3.4: Joined chunks equal original text after reconstruction
   [PASS] 3.5: One huge sentence (>1500 chars) is split so no chunk exceeds 1500 limit
   [PASS] 3.6: One huge sentence (>450 chars) is split so no chunk exceeds 450 limit
+  [PASS] 3.7: "Para one.\n\nPara two." keeps the blank line (\n\n) after translation join
+  [PASS] 3.8: A single sentence is unchanged (no trailing whitespace or separators)
 
 --- Suite 4: GTX Parser ---
   [PASS] 4.1: GTX sentence response joins 3 segments into full translation
@@ -40,7 +42,7 @@
 
 --- Suite 6: Settings Merge ---
   [PASS] 6.1: Settings merge preserves stored overrides and fills all default keys
-  [FAIL] 6.2: Settings merge ignores unknown/unrecognized keys not in DEFAULT_SETTINGS -> unknownKey in settings: true, maliciousPayload in settings: true
+  [PASS] 6.2: Settings merge ignores unknown/unrecognized keys not in DEFAULT_SETTINGS
 
 --- Suite 7: History Logic ---
   [PASS] 7.1: Legacy history entry migrated with default count (1), type ("word"), and timestamp
@@ -49,6 +51,7 @@
   [PASS] 7.4: Filter by English field matches word property only ("book", "notebook")
   [PASS] 7.5: Filter by Bangla field matches translation property only ("বই")
   [PASS] 7.6: Filter by Both fields searches word and translation properties
+  [PASS] 7.7: Fires 10 saveRecentWord calls at once; historyQueue serializes writes so all 10 distinct words are saved
 
 --- Suite 8: Cache Logic (LRU & Key Formatting) ---
   [PASS] 8.1: Sentence cache key formats as "first200chars|totalLength"
@@ -67,9 +70,5 @@
   [PASS] 10.5: CSV rows use standard CRLF (\r\n) line separators
 
 =================================================================
-TEST SUMMARY: Total: 41 | Passed: 40 | Failed: 1
+TEST SUMMARY: Total: 44 | Passed: 44 | Failed: 0
 =================================================================
-
-FAILING CASES ANALYSIS:
-1. Test [6.2] "Settings merge ignores unknown/unrecognized keys not in DEFAULT_SETTINGS"
-   Cause: unknownKey in settings: true, maliciousPayload in settings: true

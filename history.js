@@ -90,10 +90,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const sortBy = sortBySelect?.value || 'recent';
 
     let result = rawHistory.filter((item) => {
+      if (!item || typeof item !== 'object') return false;
       if (!query) return true;
 
-      const wordLower = (item.word || '').toLowerCase();
-      const transLower = (item.translation || '').toLowerCase();
+      const wordLower = String(item.word || '').toLowerCase();
+      const transLower = String(item.translation || '').toLowerCase();
 
       if (field === 'en') {
         return wordLower.includes(query);

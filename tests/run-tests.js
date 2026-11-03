@@ -105,6 +105,7 @@ vm.runInThisContext(bgCode);
 // Functions exposed from background.js in VM context:
 const detectModeFn = global.detectMode;
 const splitAtSentenceBoundariesFn = global.splitAtSentenceBoundaries;
+const joinTranslatedChunksFn = global.joinTranslatedChunks;
 const buildCacheKeyFn = global.buildCacheKey;
 const setCachedTranslationFn = global.setCachedTranslation;
 const getCachedTranslationFn = global.getCachedTranslation;
@@ -132,9 +133,10 @@ function escapeHtml(str) {
 function filterAndSortHistory(rawHistory, query = '', field = 'both', sortBy = 'recent') {
   const q = query.trim().toLowerCase();
   let result = rawHistory.filter((item) => {
+    if (!item || typeof item !== 'object') return false;
     if (!q) return true;
-    const wordLower = (item.word || '').toLowerCase();
-    const transLower = (item.translation || '').toLowerCase();
+    const wordLower = String(item.word || '').toLowerCase();
+    const transLower = String(item.translation || '').toLowerCase();
     if (field === 'en') return wordLower.includes(q);
     if (field === 'bn') return transLower.includes(q);
     return wordLower.includes(q) || transLower.includes(q);
@@ -335,6 +337,35 @@ async function runAllTests() {
     '3.6',
     `One huge sentence (>450 chars) is split so no chunk exceeds 450 limit`,
     `Got chunk count: ${hugeChunks450.length}, max chunk length: ${hugeMaxChunk450} (sentence was not split by splitAtSentenceBoundaries)`
+  );
+
+  // 3.7: Paragraph breaks preservation: "Para one.\n\nPara two." keeps the blank line
+  const paraInput = 'Para one.\n\nPara two.';
+  const paraChunks = splitAtSentenceBoundariesFn(paraInput, 1500);
+  const mockParaTranslations = [
+    { translation: 'অনুচ্ছেদ এক।', sep: paraChunks[0]?.sep },
+    { translation: 'অনুচ্ছেদ দুই।', sep: paraChunks[1]?.sep }
+  ];
+  const joinedParaResult = joinTranslatedChunksFn(mockParaTranslations);
+  assert(
+    joinedParaResult === 'অনুচ্ছেদ এক।\n\nঅনুচ্ছেদ দুই।',
+    '3.7',
+    '"Para one.\\n\\nPara two." keeps the blank line (\\n\\n) after translation join',
+    `Got: ${JSON.stringify(joinedParaResult)}`
+  );
+
+  // 3.8: Single sentence is unchanged
+  const singleInput = 'Single sentence.';
+  const singleChunks = splitAtSentenceBoundariesFn(singleInput, 1500);
+  const mockSingleTranslation = [
+    { translation: 'একক বাক্য।', sep: singleChunks[0]?.sep }
+  ];
+  const joinedSingleResult = joinTranslatedChunksFn(mockSingleTranslation);
+  assert(
+    joinedSingleResult === 'একক বাক্য।' && singleChunks.length === 1,
+    '3.8',
+    'A single sentence is unchanged (no trailing whitespace or separators)',
+    `Got: "${joinedSingleResult}"`
   );
 
   // --------------------------------------------------------------------------
@@ -542,6 +573,25 @@ async function runAllTests() {
     '7.6',
     'Filter by Both fields searches word and translation properties',
     `Matches: [${filterBoth.map((i) => i.word).join(', ')}]`
+  );
+
+  // 7.7: History queue concurrency test (10 calls at once)
+  mockStorage = {
+    recentWords: [],
+    settings: { historyLimit: 50, saveSentences: false }
+  };
+  const concurrentCalls = [];
+  for (let i = 1; i <= 10; i++) {
+    concurrentCalls.push(saveRecentWordFn(`word_${i}`, `অনুবাদ_${i}`, 'word'));
+  }
+  await Promise.all(concurrentCalls);
+  const concurrentList = mockStorage.recentWords || [];
+  const distinctWords = new Set(concurrentList.map((item) => item.word.toLowerCase()));
+  assert(
+    concurrentList.length === 10 && distinctWords.size === 10,
+    '7.7',
+    'Fires 10 saveRecentWord calls at once; historyQueue serializes writes so all 10 distinct words are saved',
+    `Saved count: ${concurrentList.length}, Distinct: ${distinctWords.size}`
   );
 
   // --------------------------------------------------------------------------

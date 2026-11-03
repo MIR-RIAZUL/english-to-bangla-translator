@@ -13,7 +13,7 @@ let _voicesLoaded = false;
 
 /**
  * Loads the browser's available speech synthesis voices.
- * Waits for the "voiceschanged" event with a 1.5-second timeout fallback,
+ * Waits for the "voiceschanged" event with a 3.0-second timeout fallback,
  * since some browsers populate voices asynchronously.
  * @returns {Promise<SpeechSynthesisVoice[]>} Resolved list of available voices.
  */
@@ -48,14 +48,14 @@ function loadVoices() {
 
       window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged);
 
-      // Timeout fallback: resolve with whatever is available after 1.5s
+      // Timeout fallback: resolve with whatever is available after 3.0s
       setTimeout(() => {
         if (settled) return;
         settled = true;
         window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
         _voicesLoaded = true;
         resolve(window.speechSynthesis.getVoices() || []);
-      }, 1500);
+      }, 3000);
     } catch (err) {
       _voicesLoaded = true;
       resolve([]);
